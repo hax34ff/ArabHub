@@ -1916,10 +1916,18 @@ wDungeon:Button("Boss Height: " .. dungeonHeightOffset .. " (tap to cycle)", fun
 end)
 
 wDungeon:Toggle("Auto Farm Dungeon", {flag = "AutoFarmDungeon"}, function(v)
+
+    if v then
+        dungeonHeightOffset = 10
+        print("[Dungeon] Boss Height Offset forced to 10")
+    end
+
     local conn
+
     local function resetOrientation()
         local char = player.Character
         local root = char and char:FindFirstChild("HumanoidRootPart")
+
         if root then
             root.AssemblyLinearVelocity  = Vector3.zero
             root.AssemblyAngularVelocity = Vector3.zero
@@ -1929,6 +1937,7 @@ wDungeon:Toggle("Auto Farm Dungeon", {flag = "AutoFarmDungeon"}, function(v)
 
     if v then
         conn = RunService.Stepped:Connect(function()
+
             if not wDungeon.flags.AutoFarmDungeon then
                 conn:Disconnect()
                 conn = nil
@@ -1937,25 +1946,45 @@ wDungeon:Toggle("Auto Farm Dungeon", {flag = "AutoFarmDungeon"}, function(v)
             end
 
             -- Only control player movement while actually inside a dungeon.
-            if not IsInsideDungeon() then return end
+            if not IsInsideDungeon() then
+                return
+            end
 
             local char    = player.Character
             local root    = char and char:FindFirstChild("HumanoidRootPart")
             local botRoot = FindActiveBotChild()
 
             if root and botRoot then
+
                 root.AssemblyLinearVelocity  = Vector3.zero
                 root.AssemblyAngularVelocity = Vector3.zero
-                local targetPos = botRoot.Position + Vector3.new(0, dungeonHeightOffset, 0)
-                root.CFrame = CFrame.fromMatrix(targetPos, customRightVector, customUpVector, -customLookVector)
+
+                local targetPos =
+                    botRoot.Position + Vector3.new(0, dungeonHeightOffset, 0)
+
+                root.CFrame = CFrame.fromMatrix(
+                    targetPos,
+                    customRightVector,
+                    customUpVector,
+                    -customLookVector
+                )
+
             elseif root then
+
                 root.AssemblyLinearVelocity  = Vector3.zero
                 root.AssemblyAngularVelocity = Vector3.zero
                 root.CFrame = CFrame.new(root.Position)
+
             end
         end)
+
     else
-        if conn then conn:Disconnect() conn = nil end
+
+        if conn then
+            conn:Disconnect()
+            conn = nil
+        end
+
         resetOrientation()
     end
 end)
@@ -2264,55 +2293,60 @@ end
 
 wElement:Section("Automation")
 
-wElement:Toggle("Auto Farm Selected Zone", {flag = "AutoElementSingle"}, function(v)
-    if AutoElementThread then task.cancel(AutoElementThread) AutoElementThread = nil end
-    if not v then return end
+elseif flag == "AutoFarmDungeon" then
 
-    AutoElementThread = task.spawn(function()
-        while wElement.flags.AutoElementSingle do
-            -- Pause while inside a dungeon
-            if IsInsideDungeon() then
-                task.wait(2)
-                while wElement.flags.AutoElementSingle and IsInsideDungeon() do
-                    task.wait(2)
-                end
-                task.wait(1)
-            end
+    dungeonHeightOffset = 10
+    print("[Dungeon] Restored Boss Height Offset to 10")
 
-            if not wElement.flags.AutoElementSingle then break end
+    local conn2
 
-            local zoneDef = ElementZoneList[SelectedElementZoneIndex]
-            if not zoneDef then task.wait(1)
-            else -- zoneDef exists, proceed
-            
-            local ok, zonePart = zoneDef.getZone()
-            local container = zoneDef.getBoss()
+    local function resetOri()
+        local c = player.Character
+        local r = c and c:FindFirstChild("HumanoidRootPart")
 
-            if not ok or not zonePart or not container then
-                task.wait(1)
-            else
-                local currentTarget = GetActiveZoneTarget(container)
-                if currentTarget then
-                    local char = player.Character
-                    local r = char and char:FindFirstChild("HumanoidRootPart")
-                    if r then
-                        local targetPart = currentTarget:FindFirstChild("HumanoidRootPart") or currentTarget:FindFirstChildWhichIsA("BasePart")
-                        local targetPos = targetPart and targetPart.Position or zonePart.Position
-                        -- Reposition every tick — corrects knockback and mob movement instantly
-                        r.AssemblyLinearVelocity = Vector3.zero
-                        r.CFrame = CFrame.new(targetPos + Vector3.new(0, 4, 0))
-                    end
-                    pcall(function() SwingSaber:FireServer() end)
-                    task.wait(0.05)
-                else
-                    task.wait(0.5)
-                end
-            end -- close if not ok or not zonePart
-            end -- close if not zoneDef else
-        end -- close while AutoElementSingle
-        AutoElementThread = nil
+        if r then
+            r.AssemblyLinearVelocity  = Vector3.zero
+            r.AssemblyAngularVelocity = Vector3.zero
+            r.CFrame = CFrame.new(r.Position)
+        end
+    end
+
+    conn2 = RunService.Stepped:Connect(function()
+
+        if not wDungeon.flags.AutoFarmDungeon then
+            conn2:Disconnect()
+            resetOri()
+            return
+        end
+
+        if not IsInsideDungeon() then
+            return
+        end
+
+        local c = player.Character
+        local r = c and c:FindFirstChild("HumanoidRootPart")
+        local b = FindActiveBotChild()
+
+        if r and b then
+
+            r.AssemblyLinearVelocity  = Vector3.zero
+            r.AssemblyAngularVelocity = Vector3.zero
+
+            r.CFrame = CFrame.fromMatrix(
+                b.Position + Vector3.new(0, dungeonHeightOffset, 0),
+                customRightVector,
+                customUpVector,
+                -customLookVector
+            )
+
+        elseif r then
+
+            r.AssemblyLinearVelocity  = Vector3.zero
+            r.AssemblyAngularVelocity = Vector3.zero
+            r.CFrame = CFrame.new(r.Position)
+
+        end
     end)
-end)
 
 wElement:Toggle("Cycle All Fire Zones", {flag = "AutoElementCycle"}, function(v)
 
