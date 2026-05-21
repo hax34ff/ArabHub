@@ -398,6 +398,52 @@ local Workspace         = game:GetService("Workspace")
 
 local player = Players.LocalPlayer
 
+-- =======================================================
+-- AUTO SAVE / RESTORE CONFIG
+-- =======================================================
+local HttpService = game:GetService("HttpService")
+local CONFIG_FILE = "ARABHub_Config.json"
+
+local ConfigFlags = {}
+
+local function SaveConfig()
+    pcall(function()
+        if writefile then
+            writefile(CONFIG_FILE, HttpService:JSONEncode(ConfigFlags))
+        end
+    end)
+end
+
+local function LoadConfig()
+    local data = {}
+
+    pcall(function()
+        if readfile and isfile and isfile(CONFIG_FILE) then
+            local raw = readfile(CONFIG_FILE)
+            data = HttpService:JSONDecode(raw)
+        end
+    end)
+
+    return data
+end
+
+local LoadedConfig = LoadConfig()
+
+local function RegisterFlag(flag, default)
+    if LoadedConfig[flag] ~= nil then
+        ConfigFlags[flag] = LoadedConfig[flag]
+    else
+        ConfigFlags[flag] = default
+    end
+
+    return ConfigFlags[flag]
+end
+
+local function UpdateFlag(flag, value)
+    ConfigFlags[flag] = value
+    SaveConfig()
+end
+
 -- Global State
 local dungeonHeightOffset = 0
 local SkipCount           = 0
@@ -471,16 +517,39 @@ function library:CreateWindow(name)
 
     function win:Toggle(label, opts, cb)
         local flag = opts and opts.flag
-        if flag then win.flags[flag] = false end
+
+        local defaultValue = false
+
+        if flag then
+            defaultValue = RegisterFlag(flag, false)
+            win.flags[flag] = defaultValue
+        end
+
         Tab:CreateToggle({
-            Name    = label,
-            Default = false,
-            Flag    = flag,
+            Name = label,
+            Default = defaultValue,
+            Flag = flag,
+
             Callback = function(v)
-                if flag then win.flags[flag] = v end
-                if cb then pcall(cb, v) end
+                if flag then
+                    win.flags[flag] = v
+                    UpdateFlag(flag, v)
+                end
+
+                if cb then
+                    pcall(cb, v)
+                end
             end,
         })
+
+        -- auto-run callback for restored toggles
+        task.spawn(function()
+            task.wait(0.2)
+
+            if defaultValue and cb then
+                pcall(cb, defaultValue)
+            end
+        end)
     end
 
     function win:Slider(label, opts, cb)
@@ -3573,4 +3642,3 @@ end)
 
 -- Restore immediately
 RestoreConfig()
-
