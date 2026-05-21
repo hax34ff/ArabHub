@@ -1790,33 +1790,87 @@ pcall(function()
 end)
 
 pcall(function()
-	wDungeon:Dropdown("Difficulty", {list = DifficultyNameList, flag = "DungeonDiff"}, function(selected)
-		for i, diff in ipairs(DungeonInfo.Difficulties) do
-			if diff.Name == selected then
-				SelectedDiffIndex = i
-				UpdateFlag("DungeonDiff", selected)
-				print("[Dungeon] Selected difficulty index: " .. i .. " (" .. selected .. ")")
-				break
-			end
-		end
-	end)
-	-- Force difficulty to Impossible and persist it
-	local function ApplyImpossible()
-		for i, diff in ipairs(DungeonInfo.Difficulties) do
-			if diff.Name == "Impossible" then
-				SelectedDiffIndex = i
-				UpdateFlag("DungeonDiff", "Impossible")
-				print("[Dungeon] Difficulty locked to Impossible (index " .. i .. ")")
-				return
-			end
-		end
-		-- Fallback: Impossible not found, use last difficulty
-		SelectedDiffIndex = #DungeonInfo.Difficulties
-		UpdateFlag("DungeonDiff", DungeonInfo.Difficulties[SelectedDiffIndex] and DungeonInfo.Difficulties[SelectedDiffIndex].Name or "Unknown")
-		warn("[Dungeon] 'Impossible' not found in DifficultyNameList — defaulted to last entry")
-	end
-	ApplyImpossible()
+
+    DungeonDifficultyDropdown = wDungeon:Dropdown(
+        "Difficulty",
+        {list = DifficultyNameList, flag = "DungeonDiff"},
+        function(selected)
+
+            for i, diff in ipairs(DungeonInfo.Difficulties) do
+                if diff.Name == selected then
+                    SelectedDiffIndex = i
+                    UpdateFlag("DungeonDiff", selected)
+
+                    print("[Dungeon] Selected difficulty index: " .. i .. " (" .. selected .. ")")
+                    break
+                end
+            end
+        end
+    )
+
+    -- Restore saved difficulty, or default to Impossible
+    local function ApplyImpossible()
+
+        local savedDiff = ConfigFlags["DungeonDiff"]
+
+        local targetName =
+            (type(savedDiff) == "string" and savedDiff ~= "")
+            and savedDiff
+            or "Impossible"
+
+        for i, diff in ipairs(DungeonInfo.Difficulties) do
+
+            if diff.Name == targetName then
+
+                SelectedDiffIndex = i
+
+                -- force visual dropdown update
+                task.spawn(function()
+                    task.wait(0.2)
+
+                    if DungeonDifficultyDropdown
+                    and DungeonDifficultyDropdown.Set then
+
+                        DungeonDifficultyDropdown:Set(diff.Name)
+                    end
+                end)
+
+                print("[Dungeon] Difficulty restored to: "
+                    .. targetName
+                    .. " (index "
+                    .. i
+                    .. ")")
+
+                return
+            end
+        end
+
+        -- fallback
+        SelectedDiffIndex = #DungeonInfo.Difficulties
+
+        task.spawn(function()
+
+            task.wait(0.2)
+
+            local fallback =
+                DungeonInfo.Difficulties[#DungeonInfo.Difficulties]
+
+            if DungeonDifficultyDropdown
+            and DungeonDifficultyDropdown.Set then
+
+                DungeonDifficultyDropdown:Set(fallback.Name)
+            end
+        end)
+
+        warn("[Dungeon] Saved difficulty '"
+            .. tostring(targetName)
+            .. "' not found — defaulted to last entry")
+    end
+
+    ApplyImpossible()
+
 end)
+
 
 -- Party type: use explicit button-style toggles so Luna can't corrupt the value
 wDungeon:Section("Party Type")
