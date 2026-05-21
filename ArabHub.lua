@@ -17,46 +17,6 @@ local LocalPlayer = Players.LocalPlayer
 local KEY_CACHE_GLOBAL = "_ARABHub_CachedKey"
 local KEY_CACHE_FILE   = "ARABHub_key.txt"
 
--- ==========================================
--- SETTINGS PERSISTENCE SYSTEM
--- Saves all toggle/slider/dropdown state to file so they restore on next load.
--- Layer: writefile/readfile (survives leaving and rejoining the game).
--- ==========================================
-local SETTINGS_CACHE_FILE = "ARABHub_settings.txt"
-local AutoSaveEnabled = true -- master switch; user can disable via Misc tab
-
-local function SaveAllSettings()
-    if not AutoSaveEnabled then return end
-    pcall(function()
-        if not writefile then return end
-        -- Collect all flags from every registered window
-        local snapshot = {}
-        for winId, win in pairs(_G._ARABHub_Windows or {}) do
-            for flag, val in pairs(win.flags or {}) do
-                snapshot[flag] = val
-            end
-        end
-        local ok, encoded = pcall(function()
-            return HttpService:JSONEncode(snapshot)
-        end)
-        if ok then writefile(SETTINGS_CACHE_FILE, encoded) end
-    end)
-end
-
-local function LoadSavedSettings()
-    local ok, data = pcall(function()
-        if not readfile then return nil end
-        local raw = readfile(SETTINGS_CACHE_FILE)
-        if not raw or raw == "" then return nil end
-        return HttpService:JSONDecode(raw)
-    end)
-    if ok and type(data) == "table" then return data end
-    return {}
-end
-
--- Global registry so SaveAllSettings can reach every window's flags
-_G._ARABHub_Windows = _G._ARABHub_Windows or {}
-
 local function copyToClipboard(text)
     if setclipboard then setclipboard(text)
     elseif toclipboard then toclipboard(text)
@@ -100,6 +60,44 @@ local function ValidateToken(token)
     local dok, data = pcall(function() return HttpService:JSONDecode(resp) end)
     return dok and data and (data.valid == true or data.success == true)
 end
+
+
+
+-- =======================================================
+-- FORCE LOAD AREAS (IMMEDIATE EXECUTION)
+-- =======================================================
+local function DeepFindFolder(parent, folderName)
+	local found = parent:FindFirstChild(folderName, true)
+	if found and (found:IsA("Folder") or found:IsA("Model")) then return found end
+	return nil
+end
+
+local function RunForceLoadAreas()
+    pcall(function()
+        -- Use WaitForChild to execute as soon as the paths exist, instead of an arbitrary timer
+        local RegionsLoaded = workspace:WaitForChild("Gameplay", 10) and workspace.Gameplay:WaitForChild("RegionsLoaded", 5)
+        local HiddenRegions = game:GetService("ReplicatedStorage"):WaitForChild("HiddenRegions", 5)
+        
+        -- Fallback to deep searching if the direct hierarchy paths vary
+        if not RegionsLoaded then RegionsLoaded = DeepFindFolder(workspace, "RegionsLoaded") end
+        if not HiddenRegions then HiddenRegions = DeepFindFolder(game:GetService("ReplicatedStorage"), "HiddenRegions") end
+        
+        if RegionsLoaded and HiddenRegions then
+            for _, region in ipairs(HiddenRegions:GetChildren()) do
+                if (region:IsA("Folder") or region:IsA("Model")) and region.Parent ~= RegionsLoaded then region.Parent = RegionsLoaded
+                end
+            end
+            print("[AMZY] Force Load Areas executed successfully.")
+        else warn("[AMZY] Force Load Areas failed: Targeted folders could not be located.")
+        end
+    end)
+end
+
+-- Execute instantly in its own non-blocking thread path upon running the script
+task.spawn(RunForceLoadAreas)
+
+
+
 
 -- ==========================================
 -- 2. CORE GUI CREATION
@@ -467,29 +465,19 @@ function library:CreateWindow(name)
     local win = {}
     win.flags = {}
 
-    -- ── AUTO-SAVE: register this window and load any previously saved flags ──
-    local _winId = name .. "_" .. tostring(math.random(1e6))
-    _G._ARABHub_Windows = _G._ARABHub_Windows or {}
-    _G._ARABHub_Windows[_winId] = win
-    local _savedSettings = LoadSavedSettings()
-    -- ─────────────────────────────────────────────────────────────────────────
-
     function win:Section(label)
         Tab:CreateSection(label)
     end
 
     function win:Toggle(label, opts, cb)
         local flag = opts and opts.flag
-        -- Restore saved value if present, otherwise default to false
-        local savedVal = (flag and _savedSettings and _savedSettings[flag]) or false
-        if flag then win.flags[flag] = savedVal end
+        if flag then win.flags[flag] = false end
         Tab:CreateToggle({
             Name    = label,
-            Default = savedVal,
+            Default = false,
             Flag    = flag,
             Callback = function(v)
                 if flag then win.flags[flag] = v end
-                SaveAllSettings() -- persist every toggle change
                 if cb then pcall(cb, v) end
             end,
         })
@@ -498,19 +486,15 @@ function library:CreateWindow(name)
     function win:Slider(label, opts, cb)
         opts = opts or {}
         local flag = opts.flag
-        -- Restore saved slider value if present
-        local savedSlider = (flag and _savedSettings and tonumber(_savedSettings[flag]))
-            or opts.default or opts.min or 0
-        if flag then win.flags[flag] = savedSlider end
+        if flag then win.flags[flag] = opts.default or opts.min or 0 end
         local sliderObj = Tab:CreateSlider({
             Name    = label,
             Minimum = opts.min or 0,
             Maximum = opts.max or 100,
-            Default = savedSlider,
+            Default = opts.default or opts.min or 0,
             Flag    = flag,
             Callback = function(v)
                 if flag then win.flags[flag] = v end
-                SaveAllSettings() -- persist every slider change
                 if cb then pcall(cb, v) end
             end,
         })
@@ -532,22 +516,14 @@ function library:CreateWindow(name)
         opts = opts or {}
         local flag  = opts.flag
         local items = opts.list or {}
-        -- Restore saved dropdown value, validate it still exists in the list
-        local savedDrop = (flag and _savedSettings and _savedSettings[flag]) or items[1] or ""
-        local savedValid = false
-        for _, item in ipairs(items) do
-            if item == savedDrop then savedValid = true break end
-        end
-        if not savedValid then savedDrop = items[1] or "" end
-        if flag then win.flags[flag] = savedDrop end
+        if flag then win.flags[flag] = items[1] or "" end
         Tab:CreateDropdown({
             Name    = label,
             Options = items,
-            Default = savedDrop,
+            Default = items[1],
             Flag    = flag,
             Callback = function(v)
                 if flag then win.flags[flag] = v end
-                SaveAllSettings() -- persist every dropdown change
                 if cb then pcall(cb, v) end
             end,
         })
@@ -587,14 +563,20 @@ local COL_SUBTEXT  = Color3.fromRGB(140, 140, 160)
 local COL_TRACK    = Color3.fromRGB(40, 40, 58)
 local COL_HANDLE   = Color3.fromRGB(160, 120, 255)
 
+
+
+
+
 -- =======================================================
 -- FORCE LOAD AREAS (IMMEDIATE EXECUTION)
 -- =======================================================
 local function RunForceLoadAreas()
     pcall(function()
+        -- Use WaitForChild to execute as soon as the paths exist, instead of an arbitrary timer
         local RegionsLoaded = workspace:WaitForChild("Gameplay", 10) and workspace.Gameplay:WaitForChild("RegionsLoaded", 5)
         local HiddenRegions = game:GetService("ReplicatedStorage"):WaitForChild("HiddenRegions", 5)
         
+        -- Fallback to deep searching if the direct hierarchy paths vary
         if not RegionsLoaded then RegionsLoaded = DeepFindFolder(workspace, "RegionsLoaded") end
         if not HiddenRegions then HiddenRegions = DeepFindFolder(game:GetService("ReplicatedStorage"), "HiddenRegions") end
         
@@ -611,7 +593,10 @@ local function RunForceLoadAreas()
     end)
 end
 
+-- Execute instantly in its own non-blocking thread path upon running the script
 task.spawn(RunForceLoadAreas)
+
+
 
 -- =======================================================
 -- UTILITY FUNCTIONS
@@ -634,6 +619,8 @@ local function GetClientDataSafe()
 	return nil
 end
 
+-- Returns true only when the player is actively inside a dungeon run
+-- (DungeonStorage exists and contains at least one dungeon folder)
 local function IsInsideDungeon()
 	local dungeonStorage = workspace:FindFirstChild("DungeonStorage")
 	if not dungeonStorage then return false end
@@ -645,13 +632,14 @@ local function IsInsideDungeon()
 	return false
 end
 
+-- Finds an alive bot in DungeonStorage (Workspace side, used during active dungeon)
 local function FindActiveBotChild()
 	local DungeonStorage = Workspace:FindFirstChild("DungeonStorage")
 	if not DungeonStorage then return nil end
 
 	for _, dungeonFolder in ipairs(DungeonStorage:GetChildren()) do
 		local Important = dungeonFolder:FindFirstChild("Important")
-		if not Important then
+		if not Important then -- continue
 		else
 
 		for _, spawner in ipairs(Important:GetChildren()) do
@@ -666,14 +654,16 @@ local function FindActiveBotChild()
 				end
 			end
 		end
-		end
+		end -- close if not Important else
 	end
 	return nil
 end
 
+-- Broad mob scan: ElementZones + RegionsLoaded + DungeonStorage
 local function GetAllMobs()
 	local mobs = {}
 
+	-- Element zones
 	local Gameplay = Workspace:FindFirstChild("Gameplay")
 	if Gameplay then
 		local Map = Gameplay:FindFirstChild("Map")
@@ -699,6 +689,7 @@ local function GetAllMobs()
 						end
 					end
 				end
+				-- also scan direct descendants for boss models
 				for _, child in ipairs(region:GetDescendants()) do
 					if child:IsA("Model") and child:GetAttribute("Health") then
 						table.insert(mobs, child)
@@ -708,6 +699,7 @@ local function GetAllMobs()
 		end
 	end
 
+	-- DungeonStorage mobs
 	local DungeonStorage = Workspace:FindFirstChild("DungeonStorage")
 	if DungeonStorage then
 		for _, dungeonFolder in ipairs(DungeonStorage:GetChildren()) do
@@ -719,6 +711,7 @@ local function GetAllMobs()
 		end
 	end
 
+	-- deduplicate
 	local seen = {}
 	local unique = {}
 	for _, m in ipairs(mobs) do
@@ -732,6 +725,7 @@ local function TeleportTo(part)
 	local root = character and character:FindFirstChild("HumanoidRootPart")
 	if not root then return end
 
+	-- Accept a Model/Folder — find its first BasePart descendant
 	local targetPart = nil
 	if typeof(part) == "Instance" then
 		if part:IsA("BasePart") then
@@ -746,6 +740,7 @@ local function TeleportTo(part)
 		return
 	end
 
+	-- Brief anchor to prevent physics from flinging the character
 	root.AssemblyLinearVelocity  = Vector3.zero
 	root.AssemblyAngularVelocity = Vector3.zero
 	root.Anchored = true
@@ -759,6 +754,10 @@ local function DeepFindFolder(parent, folderName)
 	if found and (found:IsA("Folder") or found:IsA("Model")) then return found end
 	return nil
 end
+
+ 
+
+
 
 -- =======================================================
 -- DATA TABLES: CLASS ORDER
@@ -794,7 +793,7 @@ local function GetNextClass()
 end
 
 -- =======================================================
--- DATA TABLES: EGGS (ALL EGGS)
+-- DATA TABLES: EGGS (ALL EGGS — original + new from dump)
 -- =======================================================
 local MasterEggDatabase = {
 	["Basic Egg"]        = {"Noob","Dog","Pig","Cat","Bunny","Panda","Cow","Elephant","Turtle"},
@@ -881,6 +880,7 @@ local MasterEggDatabase = {
 	["N Egg"]            = {"Spooky Green Hood","Purple Pumpkin","Double Frankenstein","Ghosdeeri","Halloween King","Purple Demon","Timothy Spooky Ghost","Frankenskull","Vampire Queen"},
 	["O Egg"]            = {"Autumn Ninja","Fall Mech","Fall Pegasus","Autumn's Sorcerer","Harvest Pirate","Harvest Demon","Fall-en King Timothy","Maple Dragon","Queen of Fall"},
 	["P Egg"]            = {"Fancy Fall","Cloaked Fall","Autumn Warrior","Leaf Wizard","Fall Archer","Leaf Demon","Steam Timothy","Hooded Korblox Mage","The Leaf Demon"},
+	-- NEW EGGS FROM DUMP
 	["Q Egg"]            = {"Cute Turkey Beanie","Angry Turkey Warrior","Fall Turkey","Gobble Gang","Turkey Protector","Turkey Demon","Timothy Turkey","Mad Turkey","Thanksgiving Queen"},
 	["R Egg"]            = {"Shadow Prince","Shadow Fairy","Shadow Pegasus","Shadow Sorcerer","Shadow Tiger","Shadow Demon","Shadow Timothy","Shadow Universe","Shadow Witch"},
 	["S Egg"]            = {"Blue Ornament","Triple Gift","Christmas Sorcerer","Gift Gang","Jingle","Santa Timothy","Frosty Demon","Christmas Dragon","Festive Queen"},
@@ -1066,6 +1066,7 @@ local EggProgressionOrder = {
 	"Lazy Dev Egg","Puppet Egg","Piggy Egg","Easy Egg","Guts Egg","Bruh Egg","Griffith Egg",
 	"Casca Egg","Femto Egg","Pippin Egg","Dog Egg","Bingo Egg","M Egg","A Egg","B Egg","C Egg",
 	"D Egg","F Egg","E Egg","H Egg","G Egg","I Egg","J Egg","K Egg","L Egg","N Egg","O Egg","P Egg",
+	-- NEW
 	"Q Egg","R Egg","S Egg","T Egg","U Egg","V Egg","W Egg","X Egg","Y Egg","Z Egg",
 	"AH Egg","AA Egg","AB Egg","AC Egg","AD Egg","AE Egg","AF Egg","AG Egg","AM Egg","AI Egg",
 	"AJ Egg","AK Egg","AL Egg","AZ Egg","AN Egg","AO Egg","AP Egg","AQ Egg","AR Egg","AS Egg",
@@ -1086,7 +1087,7 @@ local EggProgressionOrder = {
 	"GH Egg",
 }
 
--- ======================================================= 
+-- =======================================================
 -- TAB 1: FARMING & SHOP
 -- =======================================================
 local wFarm = library:CreateWindow("Farm & Shop")
@@ -1160,7 +1161,13 @@ wFarm:Toggle("Auto Sell Strength", {flag = "SellStrength"}, function(v)
 	end
 end)
 
+
+
+
+
+
 wFarm:Section("Farming")
+-- HITBOX SECTION — broadened to cover all mobs including Master Fire golems
 wFarm:Section("Hitbox Extender")
 
 local function ResetMobHitbox(mob)
@@ -1218,6 +1225,8 @@ wFarm:Box("WalkSpeed", {flag = "ws", type = "number"}, function(new)
 	end
 end)
 
+
+
 -- =======================================================
 -- TAB 2: HATCHING
 -- =======================================================
@@ -1231,7 +1240,7 @@ end
 
 local SelectedHatchEgg = AllEggNames[1]
 
-pcall(function()
+pcall(function() -- only the dropdown is wrapped; crash here won't skip the toggles below
 	wHatch:Dropdown("Select Egg", {list = AllEggNames, flag = "HatchEggPick"}, function(selected)
 		SelectedHatchEgg = selected
 	end)
@@ -1355,6 +1364,7 @@ local SelectedDiffIndex     = 1
 local SelectedGroupType     = "Public"
 local AutoDungeonLoopActive = false
 
+-- Build parallel key/display lists, keeping indices in sync
 local DungeonKeyList     = {}
 local DungeonDisplayList = {}
 for key, data in pairs(DungeonInfo.Dungeons) do
@@ -1362,6 +1372,7 @@ for key, data in pairs(DungeonInfo.Dungeons) do
 	table.insert(DungeonDisplayList, data.DisplayName or key)
 end
 
+-- Print all available dungeon keys so we can confirm the correct one
 task.defer(function()
 	print("[Dungeon] Available dungeon keys:")
 	for i, key in ipairs(DungeonKeyList) do
@@ -1369,6 +1380,7 @@ task.defer(function()
 	end
 end)
 
+-- Default to first key — user can change via dropdown
 local SelectedDungeonKey = DungeonKeyList[1]
 
 local DifficultyNameList = {}
@@ -1376,12 +1388,14 @@ for _, diff in ipairs(DungeonInfo.Difficulties) do
 	table.insert(DifficultyNameList, diff.Name)
 end
 
+-- NOTE: GetDungeonCooldown is defined here so the task.defer below can reference it.
 local function GetDungeonCooldown()
 	local mgr = GetClientData()
 	if not mgr or not mgr.Data then return 0 end
 	local cooldownEnd = mgr.Data.DungeonCooldownEndDT
 	if not cooldownEnd then return 0 end
 
+	-- Try DateTimeManager first (server-synced time, most accurate)
 	local MainClient  = player.PlayerScripts:FindFirstChild("MainClient")
 	local dateTimeMod = MainClient and MainClient:FindFirstChild("DateTimeManager") and require(MainClient.DateTimeManager)
 
@@ -1391,11 +1405,15 @@ local function GetDungeonCooldown()
 			print("[DEBUG] cooldownEnd =", cooldownEnd, "now =", now, "difference =", cooldownEnd - now)
 
 			if typeof(cooldownEnd) == "number" then
+				-- Auto-detect ms vs seconds by magnitude (ms > 1e10 in 2024+)
 				local endIsMs = cooldownEnd > 1e10
 				local nowIsMs = now > 1e10
+
 				local endSec = endIsMs and (cooldownEnd / 1000) or cooldownEnd
 				local nowSec = nowIsMs and (now / 1000) or now
+
 				return math.max(0, math.floor(endSec - nowSec))
+
 			elseif typeof(cooldownEnd) == "DateTime" then
 				local nowSec = now > 1e10 and math.floor(now / 1000) or now
 				return math.max(0, cooldownEnd.UnixTimestamp - nowSec)
@@ -1403,7 +1421,9 @@ local function GetDungeonCooldown()
 		end
 	end
 
+	-- Fallback: use os.time() (Unix seconds) directly
 	if typeof(cooldownEnd) == "number" then
+		-- cooldownEnd might be Unix-ms or Unix-s; detect by magnitude
 		local asSeconds = cooldownEnd > 1e10 and math.floor(cooldownEnd / 1000) or cooldownEnd
 		return math.max(0, asSeconds - os.time())
 	elseif typeof(cooldownEnd) == "DateTime" then
@@ -1412,6 +1432,7 @@ local function GetDungeonCooldown()
 	return 0
 end
 
+-- Prints remaining cooldown once on load (single line, not a loop)
 task.defer(function()
 	task.wait(3)
 	pcall(function()
@@ -1439,32 +1460,39 @@ local function TeleportToDungeonSelect()
 
 	local Gameplay      = workspace:FindFirstChild("Gameplay")
 	local RegionsLoaded = Gameplay and Gameplay:FindFirstChild("RegionsLoaded")
+
+	-- Try several known paths for the dungeon select pad
 	local SelectPad = nil
 
+	-- Path 1: Dungeon Lobby > Locations > DungeonSelect
 	local DungeonLobby = RegionsLoaded and RegionsLoaded:FindFirstChild("Dungeon Lobby")
 	local Locations    = DungeonLobby and DungeonLobby:FindFirstChild("Locations")
 	SelectPad = Locations and Locations:FindFirstChild("DungeonSelect")
-	if SelectPad then print("[Dungeon] Found SelectPad via path 1") end
+	if SelectPad then print("[Dungeon] Found SelectPad via path 1 (Dungeon Lobby > Locations > DungeonSelect)") end
 
+	-- Path 2: Gameplay > Locations > Dungeons
 	if not SelectPad then
 		local mainLocations = Gameplay and Gameplay:FindFirstChild("Locations")
 		SelectPad = mainLocations and mainLocations:FindFirstChild("Dungeons")
-		if SelectPad then print("[Dungeon] Found SelectPad via path 2") end
+		if SelectPad then print("[Dungeon] Found SelectPad via path 2 (Gameplay > Locations > Dungeons)") end
 	end
 
+	-- Path 3: deep search RegionsLoaded for anything named "DungeonSelect" or "Dungeon"
 	if not SelectPad and RegionsLoaded then
 		SelectPad = RegionsLoaded:FindFirstChild("DungeonSelect", true)
-		if SelectPad then print("[Dungeon] Found SelectPad via path 3") end
+		if SelectPad then print("[Dungeon] Found SelectPad via path 3 (deep search RegionsLoaded)") end
 	end
 
+	-- Path 4: deep search entire Gameplay
 	if not SelectPad and Gameplay then
 		SelectPad = Gameplay:FindFirstChild("DungeonSelect", true)
 			or Gameplay:FindFirstChild("Dungeon Select", true)
-		if SelectPad then print("[Dungeon] Found SelectPad via path 4") end
+		if SelectPad then print("[Dungeon] Found SelectPad via path 4 (deep search Gameplay)") end
 	end
 
 	if not SelectPad then
 		warn("[Dungeon] TeleportToDungeonSelect: could not find any dungeon select pad. Skipping teleport.")
+		-- Don't return false — still try to fire the group action without teleporting
 		return true
 	end
 
@@ -1473,7 +1501,7 @@ local function TeleportToDungeonSelect()
 
 	if not targetPart then
 		warn("[Dungeon] TeleportToDungeonSelect: SelectPad has no BasePart child")
-		return true
+		return true -- still try the group action
 	end
 
 	root.AssemblyLinearVelocity  = Vector3.zero
@@ -1487,10 +1515,14 @@ local function TeleportToDungeonSelect()
 	return true
 end
 
+
+-- Waits for the dungeon boss to appear and die, then claims the chest.
+-- Returns true when the run is fully complete, false on timeout or toggle-off.
 local function WaitForDungeonBossAndClaimChest(timeout)
 	timeout = timeout or 300
 	local elapsed = 0
 
+	-- 1. Wait for a boss to actually spawn inside DungeonStorage
 	while elapsed < timeout do
 		if not wDungeon.flags.AutoRunDungeons then return false end
 		local boss = FindActiveBotChild()
@@ -1501,6 +1533,7 @@ local function WaitForDungeonBossAndClaimChest(timeout)
 
 	if elapsed >= timeout then return false end
 
+	-- 2. Wait for the boss to die (health reaches 0 / disappears)
 	while elapsed < timeout do
 		if not wDungeon.flags.AutoRunDungeons then return false end
 		local boss = FindActiveBotChild()
@@ -1509,6 +1542,7 @@ local function WaitForDungeonBossAndClaimChest(timeout)
 		elapsed = elapsed + 1
 	end
 
+	-- 3. Claim the chest
 	task.wait(1)
 
 	local dungeonStorage = workspace:FindFirstChild("DungeonStorage")
@@ -1533,6 +1567,7 @@ local function WaitForDungeonBossAndClaimChest(timeout)
 		end
 	end
 
+	-- Reset player orientation and teleport back out of the dungeon
 	local char = player.Character
 	local root = char and char:FindFirstChild("HumanoidRootPart")
 	if root then
@@ -1561,6 +1596,7 @@ local function WaitForDungeonBossAndClaimChest(timeout)
 end
 
 local function CreateAndStartDungeon()
+	-- Hard guard: never attempt to start if already inside a dungeon
 	if IsInsideDungeon() then
 		warn("[Dungeon] CreateAndStartDungeon: already inside dungeon, aborting")
 		return false
@@ -1625,6 +1661,7 @@ pcall(function()
 			end
 		end
 	end)
+	-- Force-set to first entry on init
 	SelectedDungeonKey = DungeonKeyList[1]
 end)
 
@@ -1638,9 +1675,10 @@ pcall(function()
 			end
 		end
 	end)
-	SelectedDiffIndex = 1
+	SelectedDiffIndex = 1 -- force-init to first
 end)
 
+-- Party type: use explicit button-style toggles so Luna can't corrupt the value
 wDungeon:Section("Party Type")
 wDungeon:Button("Set Public (currently: " .. SelectedGroupType .. ")", function()
 	SelectedGroupType = "Public"
@@ -1735,6 +1773,12 @@ end)
 
 wDungeon:Section("Cooldown Status")
 
+-- Cooldown is tracked silently; no console spam.
+-- The Auto Run loop reads GetDungeonCooldown() directly each cycle.
+
+-- =======================================================
+-- DUNGEON FARMING (moved here from Farm & Shop tab)
+-- =======================================================
 wDungeon:Section("Farming")
 
 dungeonHeightOffset = 0
@@ -1769,6 +1813,7 @@ wDungeon:Toggle("Auto Farm Dungeon", {flag = "AutoFarmDungeon"}, function(v)
                 return
             end
 
+            -- Only control player movement while actually inside a dungeon.
             if not IsInsideDungeon() then return end
 
             local char    = player.Character
@@ -1792,6 +1837,7 @@ wDungeon:Toggle("Auto Farm Dungeon", {flag = "AutoFarmDungeon"}, function(v)
     end
 end)
 
+-- Auto Claim Chest — teleports to chest and fires proximity prompt when boss dies
 wDungeon:Toggle("Auto Claim Chest", {flag = "AutoClaimChest"}, function(v)
     if v then
         task.spawn(function()
@@ -1805,6 +1851,7 @@ wDungeon:Toggle("Auto Claim Chest", {flag = "AutoClaimChest"}, function(v)
                     local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
                     if not root then continue end
 
+                    -- Find ANY ProximityPrompt in dungeon (works for all chest types)
                     local prompt = dungeon:FindFirstChildWhichIsA("ProximityPrompt", true)
 
                     if prompt then
@@ -1823,15 +1870,26 @@ wDungeon:Toggle("Auto Claim Chest", {flag = "AutoClaimChest"}, function(v)
     end
 end)
 
+-- =======================================================
+-- DUNGEON UPGRADES — Auto-buy selected upgrades with shards
+-- Based on DungeonUpgradeShop module structure:
+--   DungeonUpgShop.UpgradeTypes  = ordered list of upgrade keys
+--   DungeonUpgShop[key]          = { DisplayName, Image, Upgrades = [{Price, Amount},...] }
+-- Remote: UIAction:FireServer("BuyDungeonUpgrade", key, nextLevel)
+-- Player data: ClientDataManager.Data.DungeonUpgrades[key] = currentLevel (0-based)
+--              ClientDataManager.Data.DungeonShards         = shard balance
+-- =======================================================
 wDungeon:Section("Dungeon Upgrades")
 
-local UpgradeSelectionFlags = {}
+-- Build a checkbox list from the live module so it always reflects the real upgrade types
+local UpgradeSelectionFlags = {} -- key → flag string
 
 local function GetUpgradeLabel(key)
 	local def = DungeonUpgShop[key]
 	return def and (def.DisplayName or key) or key
 end
 
+-- One toggle per upgrade type so the user picks exactly what to auto-buy
 for _, key in ipairs(DungeonUpgShop.UpgradeTypes) do
 	local label = GetUpgradeLabel(key)
 	local flag  = "DungUpg_" .. key
@@ -1841,6 +1899,7 @@ end
 
 wDungeon:Section("Upgrade Actions")
 
+-- Fires the purchase for every selected upgrade that still has a next tier and enough shards
 local function RunDungeonUpgrades()
 	local mgr = GetClientData()
 	if not mgr or not mgr.Data then return end
@@ -1857,14 +1916,14 @@ local function RunDungeonUpgrades()
 		local nextLv    = currentLv + 1
 		local upgData   = def.Upgrades and def.Upgrades[nextLv]
 
-		if not upgData then continue end
+		if not upgData then continue end -- already maxed
 
 		local shards = data.DungeonShards or 0
 		if shards >= upgData.Price then
 			pcall(function()
 				UIAction:FireServer("BuyDungeonUpgrade", key, nextLv)
 			end)
-			task.wait(0.3)
+			task.wait(0.3) -- small gap between purchases to avoid rate issues
 		end
 	end
 end
@@ -1873,6 +1932,8 @@ wDungeon:Button("Buy Selected Upgrades Now", function()
 	task.spawn(RunDungeonUpgrades)
 end)
 
+-- Auto-buy loop: fires after each dungeon run when shards arrive,
+-- and also on a slow background tick so it catches shard top-ups
 local AutoUpgradeThread = nil
 
 wDungeon:Toggle("Auto Buy Upgrades (Background)", {flag = "AutoDungeonUpgrade"}, function(v)
@@ -1881,6 +1942,7 @@ wDungeon:Toggle("Auto Buy Upgrades (Background)", {flag = "AutoDungeonUpgrade"},
 
 	AutoUpgradeThread = task.spawn(function()
 		while wDungeon.flags.AutoDungeonUpgrade do
+			-- Only attempt purchases outside of a dungeon run
 			if not IsInsideDungeon() then
 				pcall(RunDungeonUpgrades)
 			end
@@ -1890,15 +1952,25 @@ wDungeon:Toggle("Auto Buy Upgrades (Background)", {flag = "AutoDungeonUpgrade"},
 	end)
 end)
 
+
 -- =======================================================
--- TAB 5: AUTO ELEMENT FARMING
+-- TAB 5: AUTO ELEMENT FARMING (MASTER FIRE RE-ADDED)
 -- =======================================================
 local wElement = library:CreateWindow("Auto Element")
+
+-- ============================================================
+-- PATCH: Unified hidden+loaded area resolver
+-- Searches BOTH workspace.Gameplay.RegionsLoaded AND
+-- ReplicatedStorage.HiddenRegions so the script works
+-- regardless of whether the server has streamed the region.
+-- ============================================================
 
 local _HiddenRegions = ReplicatedStorage:FindFirstChild("HiddenRegions")
 local _RegionsLoaded = workspace:FindFirstChild("Gameplay")
     and workspace.Gameplay:FindFirstChild("RegionsLoaded")
 
+-- Returns the named area folder from whichever container has it.
+-- Priority: RegionsLoaded (already active) > HiddenRegions (template).
 local function FindAreaFolder(areaName)
     if _RegionsLoaded then
         local f = _RegionsLoaded:FindFirstChild(areaName)
@@ -1908,6 +1980,7 @@ local function FindAreaFolder(areaName)
         local f = _HiddenRegions:FindFirstChild(areaName)
         if f then return f end
     end
+    -- Refresh cached references in case they appeared after script start
     _RegionsLoaded = workspace:FindFirstChild("Gameplay")
         and workspace.Gameplay:FindFirstChild("RegionsLoaded")
     _HiddenRegions = ReplicatedStorage:FindFirstChild("HiddenRegions")
@@ -1922,6 +1995,8 @@ local function FindAreaFolder(areaName)
     return nil
 end
 
+-- Returns the element sub-folder (e.g. .Important.Fire) from an area folder,
+-- falling back to the area folder itself if the path doesn't exist.
 local function GetElementContainer(areaFolder, elementName)
     if not areaFolder then return nil end
     elementName = elementName or "Fire"
@@ -1929,13 +2004,14 @@ local function GetElementContainer(areaFolder, elementName)
     if imp then
         local el = imp:FindFirstChild(elementName)
         if el then return el end
-        return imp
+        return imp  -- fallback: Important itself
     end
     local el = areaFolder:FindFirstChild(elementName)
     if el then return el end
     return areaFolder
 end
 
+-- Returns the InnerCircle BasePart for zone teleportation, searching both containers.
 local function GetInnerCircle(areaFolder, elementName)
     if not areaFolder then return nil end
     elementName = elementName or "Fire"
@@ -1945,6 +2021,7 @@ local function GetInnerCircle(areaFolder, elementName)
     return ic
 end
 
+-- Priority layout: index 1 = highest (Grandmaster), 4 = lowest (Base)
 local ElementZoneList = {
     {
         name    = "Grandmaster Fire",
@@ -1998,9 +2075,11 @@ local ElementZoneList = {
         end,
     },
 }
+-- END PATCH: ElementZoneList
 
+-- Alphabetized or structured sequence representation for dropdown GUI selection elements
 local ElementZoneNames = {"Base Fire", "Advanced Fire", "Master Fire", "Grandmaster Fire"}
-local SelectedElementZoneIndex = 4
+local SelectedElementZoneIndex = 4 -- Default to Base Fire index positioning reference inside structural list array
 local AutoElementThread        = nil
 
 wElement:Section("Zone Selection")
@@ -2016,8 +2095,10 @@ pcall(function()
 	end)
 end)
 
+-- PATCH: Scan descendants (not just direct children) so nested boss models are found
 local function GetActiveZoneTarget(container)
     if not container then return nil end
+    -- Direct children first (fast path)
     for _, child in ipairs(container:GetChildren()) do
         if child:IsA("Model") then
             local hp = child:GetAttribute("Health")
@@ -2026,6 +2107,7 @@ local function GetActiveZoneTarget(container)
             end
         end
     end
+    -- Deep scan for nested models (HiddenRegions structure may be deeper)
     for _, child in ipairs(container:GetDescendants()) do
         if child:IsA("Model") and child ~= container then
             local hp = child:GetAttribute("Health")
@@ -2036,7 +2118,9 @@ local function GetActiveZoneTarget(container)
     end
     return nil
 end
+-- END PATCH: GetActiveZoneTarget
 
+-- PATCH: Fixed loop — index 1 = Grandmaster (highest), so iterate 1→N
 local function FindHighestPriorityZone()
     for i = 1, #ElementZoneList do
         local zoneDef = ElementZoneList[i]
@@ -2053,6 +2137,7 @@ local function FindHighestPriorityZone()
     end
     return nil
 end
+-- END PATCH: FindHighestPriorityZone
 
 wElement:Section("Automation")
 
@@ -2062,6 +2147,7 @@ wElement:Toggle("Auto Farm Selected Zone", {flag = "AutoElementSingle"}, functio
 
     AutoElementThread = task.spawn(function()
         while wElement.flags.AutoElementSingle do
+            -- Pause while inside a dungeon
             if IsInsideDungeon() then
                 task.wait(2)
                 while wElement.flags.AutoElementSingle and IsInsideDungeon() do
@@ -2074,7 +2160,7 @@ wElement:Toggle("Auto Farm Selected Zone", {flag = "AutoElementSingle"}, functio
 
             local zoneDef = ElementZoneList[SelectedElementZoneIndex]
             if not zoneDef then task.wait(1)
-            else
+            else -- zoneDef exists, proceed
             
             local ok, zonePart = zoneDef.getZone()
             local container = zoneDef.getBoss()
@@ -2089,6 +2175,7 @@ wElement:Toggle("Auto Farm Selected Zone", {flag = "AutoElementSingle"}, functio
                     if r then
                         local targetPart = currentTarget:FindFirstChild("HumanoidRootPart") or currentTarget:FindFirstChildWhichIsA("BasePart")
                         local targetPos = targetPart and targetPart.Position or zonePart.Position
+                        -- Reposition every tick — corrects knockback and mob movement instantly
                         r.AssemblyLinearVelocity = Vector3.zero
                         r.CFrame = CFrame.new(targetPos + Vector3.new(0, 4, 0))
                     end
@@ -2097,37 +2184,50 @@ wElement:Toggle("Auto Farm Selected Zone", {flag = "AutoElementSingle"}, functio
                 else
                     task.wait(0.5)
                 end
-            end
-            end
-        end
+            end -- close if not ok or not zonePart
+            end -- close if not zoneDef else
+        end -- close while AutoElementSingle
         AutoElementThread = nil
     end)
 end)
 
 wElement:Toggle("Cycle All Fire Zones", {flag = "AutoElementCycle"}, function(v)
+
     if AutoElementThread then
         task.cancel(AutoElementThread)
         AutoElementThread = nil
     end
 
-    if not v then return end
+    if not v then
+        return
+    end
 
     AutoElementThread = task.spawn(function()
+
         local currentTarget = nil
 
         while wElement.flags.AutoElementCycle do
+
+            -- Pause inside dungeons
             if IsInsideDungeon() then
+
                 currentTarget = nil
+
                 while wElement.flags.AutoElementCycle and IsInsideDungeon() do
                     task.wait(1)
                 end
+
                 task.wait(0.5)
                 continue
             end
 
+            -- Validate current target
             local valid = false
+
             if currentTarget and currentTarget.Parent then
+
                 local hum = currentTarget:FindFirstChildOfClass("Humanoid")
+
                 if hum then
                     valid = hum.Health > 0
                 else
@@ -2135,13 +2235,23 @@ wElement:Toggle("Cycle All Fire Zones", {flag = "AutoElementCycle"}, function(v)
                 end
             end
 
+            -- ONLY acquire a new target if current one is dead
             if not valid then
+
                 currentTarget = nil
+
                 local bestIndex = FindHighestPriorityZone()
+
                 if bestIndex then
+
                     local zoneDef = ElementZoneList[bestIndex]
+
                     if zoneDef then
-                        local container = zoneDef.getBoss and zoneDef.getBoss()
+
+                        local container =
+                            zoneDef.getBoss
+                            and zoneDef.getBoss()
+
                         if container then
                             currentTarget = GetActiveZoneTarget(container)
                         end
@@ -2149,21 +2259,31 @@ wElement:Toggle("Cycle All Fire Zones", {flag = "AutoElementCycle"}, function(v)
                 end
             end
 
+            -- Attack locked target
             if currentTarget then
+
                 local char = player.Character
                 local root = char and char:FindFirstChild("HumanoidRootPart")
 
                 if root then
-                    local targetPart = currentTarget:FindFirstChild("HumanoidRootPart")
+
+                    local targetPart =
+                        currentTarget:FindFirstChild("HumanoidRootPart")
                         or currentTarget:FindFirstChildWhichIsA("BasePart")
+
                     if targetPart then
+
                         root.AssemblyLinearVelocity = Vector3.zero
                         root.AssemblyAngularVelocity = Vector3.zero
-                        root.CFrame = targetPart.CFrame + Vector3.new(0, 4, 0)
+
+                        root.CFrame =
+                            targetPart.CFrame + Vector3.new(0, 4, 0)
                     end
                 end
 
-                pcall(function() SwingSaber:FireServer() end)
+                pcall(function()
+                    SwingSaber:FireServer()
+                end)
             end
 
             task.wait(0.05)
@@ -2186,9 +2306,9 @@ wElement:Button("Teleport to Selected Zone", function()
         end
     end
 end)
-
 -- =======================================================
--- TAB 6: TELEPORTS
+
+-- TAB 6: TELEPORTS (own window)
 -- =======================================================
 local wTP = library:CreateWindow("Teleports")
  
@@ -2200,11 +2320,12 @@ wTP:Button("Dungeons Lobby",    function() pcall(function() TeleportTo(workspace
  
 wTP:Section("Fire Zones")
 wTP:Button("Base Fire",         function() pcall(function() TeleportTo(workspace.Gameplay.Map.ElementZones.Fire.InnerCircle) end) end)
+-- PATCH: Fire zone teleports use FindAreaFolder so they work whether region is loaded or hidden
 wTP:Button("Advanced Fire",     function()
     pcall(function()
         local a = FindAreaFolder("AdvancedFireArea")
         local ic = a and GetInnerCircle(a, "Fire")
-        if ic then TeleportTo(ic) else warn("[TP] AdvancedFireArea not found") end
+        if ic then TeleportTo(ic) else warn("[TP] AdvancedFireArea not found in RegionsLoaded or HiddenRegions") end
     end)
 end)
 wTP:Button("Master Fire",       function()
@@ -2239,13 +2360,20 @@ wTP:Button("Advanced Plasma (Normal)", function() pcall(function() TeleportTo(wo
 wTP:Button("Advanced Plasma",          function() pcall(function() TeleportTo(workspace.Gameplay.RegionsLoaded.AdvancedPlasmaArea.Important.Plasma.InnerCircle) end) end)
 wTP:Button("Master Plasma",            function() pcall(function() TeleportTo(workspace.Gameplay.RegionsLoaded.MasterPlasmaArea.Important.Plasma.InnerCircle) end) end)
 wTP:Button("Grandmaster Plasma",       function() pcall(function() TeleportTo(workspace.Gameplay.RegionsLoaded.GrandmasterPlasmaArea.InnerCircle) end) end)
+ 
+-- =======================================================
+-- TAB 7: CLAN QUESTS & TELEPORTS
+-- SINGLE QUEST SYSTEM
+-- Only runs ONE quest at a time to prevent teleport fighting
+-- =======================================================
 
--- =======================================================
--- TAB 7: CLAN QUESTS
--- =======================================================
 local wExtra = library:CreateWindow("Quests")
 
 wExtra:Section("Clan Quests")
+
+-- =======================================================
+-- QUEST HELPERS
+-- =======================================================
 
 local currentQuestThread = nil
 local currentQuestIndex = nil
@@ -2259,29 +2387,47 @@ local function GetFreshQuests()
 end
 
 local function IsQuestDone(questProgress, questDef)
-	if questProgress.ClaimedReward then return true end
+	if questProgress.ClaimedReward then
+		return true
+	end
+
 	local goal = questDef.GoalAmount or math.huge
 	local current = questProgress.Amount or 0
+
 	return current >= goal
 end
 
 local function StillIncomplete(questIndex, goal)
 	local fresh = GetFreshQuests()
-	if not fresh then return false end
+
+	if not fresh then
+		return false
+	end
+
 	local q = fresh[questIndex]
-	if not q or q.ClaimedReward then return false end
+
+	if not q or q.ClaimedReward then
+		return false
+	end
+
 	return (q.Amount or 0) < goal
 end
 
 local function AutoClaimCompleted()
 	local quests = GetFreshQuests()
-	if not quests then return end
+
+	if not quests then
+		return
+	end
+
 	for questIndex, qp in pairs(quests) do
 		if not qp.ClaimedReward then
 			local qd = QuestInfo.ClanQuests[qp.Id]
 			if qd then
 				if (qp.Amount or 0) >= (qd.GoalAmount or math.huge) then
-					pcall(function() UIAction:FireServer("ClaimClanQuest", questIndex) end)
+					pcall(function()
+						UIAction:FireServer("ClaimClanQuest", questIndex)
+					end)
 					task.wait(0.4)
 				end
 			end
@@ -2289,77 +2435,169 @@ local function AutoClaimCompleted()
 	end
 end
 
+-- =======================================================
+-- QUEST CLASSIFIER
+-- =======================================================
+
 local function ClassifyQuest(text)
 	text = string.lower(text)
-	if text:find("boss") or text:find("dungeon boss") then return "boss" end
-	if text:find("hatch") or text:find("egg") then return "hatch" end
-	if text:find("swing") or text:find("damage") or text:find("hit") then return "swing" end
-	if text:find("sell") then return "sell" end
-	if text:find("defeat") or text:find("element") or text:find("kill") or text:find("enemy") or text:find("enemies") then return "element" end
-	if text:find("class") or text:find("evolve") then return "class" end
-	if text:find("koth") or text:find("king of the hill") or text:find("hill") then return "koth" end
-	if text:find("flag") or text:find("capture") then return "flag" end
+
+	if text:find("boss") or text:find("dungeon boss") then
+		return "boss"
+	end
+
+	if text:find("hatch") or text:find("egg") then
+		return "hatch"
+	end
+
+	if text:find("swing") or text:find("damage") or text:find("hit") then
+		return "swing"
+	end
+
+	if text:find("sell") then
+		return "sell"
+	end
+
+	if text:find("defeat")
+		or text:find("element")
+		or text:find("kill")
+		or text:find("enemy")
+		or text:find("enemies")
+	then
+		return "element"
+	end
+
+	if text:find("class") or text:find("evolve") then
+		return "class"
+	end
+
+	if text:find("koth")
+		or text:find("king of the hill")
+		or text:find("hill")
+	then
+		return "koth"
+	end
+
+	if text:find("flag") or text:find("capture") then
+		return "flag"
+	end
+
 	return "unknown"
 end
 
+-- =======================================================
+-- QUEST HANDLERS
+-- =======================================================
+
 local function HandleHatchQuest(questIndex, goal, questText)
 	local targetEgg = EggProgressionOrder[1]
+
 	for _, eggName in ipairs(EggProgressionOrder) do
-		if questText:find(eggName:lower(), 1, true) then
-			targetEgg = eggName break
+		local pattern = eggName:lower()
+
+		if questText:find(pattern, 1, true) then
+			targetEgg = eggName
+			break
 		end
 	end
+
 	print("[Quests] Hatch quest:", targetEgg)
-	while wExtra.flags.AutoCompleteClanQuests and StillIncomplete(questIndex, goal) do
+
+	while wExtra.flags.AutoCompleteClanQuests
+		and StillIncomplete(questIndex, goal)
+	do
 		pcall(function()
 			local petShop = workspace.Gameplay.Locations.PetShop
-			local part = petShop:IsA("BasePart") and petShop or petShop:FindFirstChildWhichIsA("BasePart", true)
+			local part = petShop:IsA("BasePart")
+				and petShop
+				or petShop:FindFirstChildWhichIsA("BasePart", true)
+
 			local char = player.Character
 			local root = char and char:FindFirstChild("HumanoidRootPart")
+
 			if root and part then
 				root.AssemblyLinearVelocity = Vector3.zero
 				root.CFrame = part.CFrame + Vector3.new(0, 4, 0)
 			end
 		end)
-		pcall(function() UIAction:FireServer("BuyEgg", targetEgg) end)
+
+		pcall(function()
+			UIAction:FireServer("BuyEgg", targetEgg)
+		end)
+
 		task.wait(0.25)
 	end
 end
 
 local function HandleSwingQuest(questIndex, goal)
 	print("[Quests] Swing quest")
-	while wExtra.flags.AutoCompleteClanQuests and StillIncomplete(questIndex, goal) do
-		pcall(function() SwingSaber:FireServer() end)
+
+	while wExtra.flags.AutoCompleteClanQuests
+		and StillIncomplete(questIndex, goal)
+	do
+		pcall(function()
+			SwingSaber:FireServer()
+		end)
+
 		task.wait(0.05)
 	end
 end
 
 local function HandleSellQuest(questIndex, goal)
 	print("[Quests] Sell quest")
-	while wExtra.flags.AutoCompleteClanQuests and StillIncomplete(questIndex, goal) do
-		pcall(function() SellStrength:FireServer() end)
+
+	while wExtra.flags.AutoCompleteClanQuests
+		and StillIncomplete(questIndex, goal)
+	do
+		pcall(function()
+			SellStrength:FireServer()
+		end)
+
 		task.wait(0.1)
 	end
 end
 
+-- PATCH: HandleElementQuest — uses unified FindAreaFolder so higher tiers work
 local function HandleElementQuest(questIndex, goal)
     local function GetZonePart()
+        -- Try zones from highest to lowest tier
         local tries = {
-            function() local a = FindAreaFolder("GrandmasterFireArea") return a and GetInnerCircle(a, "Fire") end,
-            function() local a = FindAreaFolder("MasterFireArea") return a and GetInnerCircle(a, "Fire") end,
-            function() local a = FindAreaFolder("AdvancedFireArea") return a and GetInnerCircle(a, "Fire") end,
-            function() return workspace.Gameplay.Map.ElementZones.Fire.InnerCircle end,
-            function() return workspace.Gameplay.Map.ElementZones.Water.InnerCircle end,
-            function() return workspace.Gameplay.Map.ElementZones.Earth.Model.Earth.InnerCircle end,
+            function()
+                local a = FindAreaFolder("GrandmasterFireArea")
+                return a and GetInnerCircle(a, "Fire")
+            end,
+            function()
+                local a = FindAreaFolder("MasterFireArea")
+                return a and GetInnerCircle(a, "Fire")
+            end,
+            function()
+                local a = FindAreaFolder("AdvancedFireArea")
+                return a and GetInnerCircle(a, "Fire")
+            end,
+            function()
+                return workspace.Gameplay.Map.ElementZones.Fire.InnerCircle
+            end,
+            function()
+                return workspace.Gameplay.Map.ElementZones.Water.InnerCircle
+            end,
+            function()
+                return workspace.Gameplay.Map.ElementZones.Earth.Model.Earth.InnerCircle
+            end,
         }
         for _, fn in ipairs(tries) do
             local ok, part = pcall(fn)
-            if ok and part and typeof(part) == "Instance" and part:IsA("BasePart") then return part end
+            if ok and part and typeof(part) == "Instance" and part:IsA("BasePart") then
+                return part
+            end
         end
         return nil
     end
+
     print("[Quests] Element quest")
-    while wExtra.flags.AutoCompleteClanQuests and StillIncomplete(questIndex, goal) do
+
+    while wExtra.flags.AutoCompleteClanQuests
+        and StillIncomplete(questIndex, goal)
+    do
         local zone = GetZonePart()
         if zone then
             local char = player.Character
@@ -2373,35 +2611,56 @@ local function HandleElementQuest(questIndex, goal)
         task.wait(0.05)
     end
 end
+-- END PATCH: HandleElementQuest
 
 local function HandleBossQuest(questIndex, goal)
 	print("[Quests] Boss quest")
+
 	local function GetBossRoot()
 		local ok, result = pcall(function()
 			local boss = workspace.Gameplay.Boss.BossHolder:FindFirstChild("Boss")
+
 			if boss and tonumber(boss:GetAttribute("Health") or 0) > 0 then
 				return boss:FindFirstChild("HumanoidRootPart")
 			end
+
 			return nil
 		end)
+
 		return ok and result or nil
 	end
-	while wExtra.flags.AutoCompleteClanQuests and StillIncomplete(questIndex, goal) do
+
+	while wExtra.flags.AutoCompleteClanQuests
+		and StillIncomplete(questIndex, goal)
+	do
 		local bossRoot = GetBossRoot()
+
 		if bossRoot then
 			local char = player.Character
 			local root = char and char:FindFirstChild("HumanoidRootPart")
-			if root then root.CFrame = bossRoot.CFrame * CFrame.new(0, 0, -5) end
-			pcall(function() SwingSaber:FireServer() end)
+
+			if root then
+				root.CFrame = bossRoot.CFrame * CFrame.new(0, 0, -5)
+			end
+
+			pcall(function()
+				SwingSaber:FireServer()
+			end)
+
 			task.wait(0.05)
+
 		else
 			local cd = GetDungeonCooldown()
+
 			if cd > 0 then
 				task.wait(cd + 2)
 			else
 				pcall(function()
-					if CreateAndStartDungeon() then WaitForDungeonBossAndClaimChest(300) end
+					if CreateAndStartDungeon() then
+						WaitForDungeonBossAndClaimChest(300)
+					end
 				end)
+
 				task.wait(3)
 			end
 		end
@@ -2410,181 +2669,367 @@ end
 
 local function HandleClassQuest(questIndex, goal)
 	print("[Quests] Class quest")
-	while wExtra.flags.AutoCompleteClanQuests and StillIncomplete(questIndex, goal) do
+
+	while wExtra.flags.AutoCompleteClanQuests
+		and StillIncomplete(questIndex, goal)
+	do
 		local nextClass = GetNextClass()
-		if nextClass then pcall(function() UIAction:FireServer("BuyClass", nextClass) end) end
+
+		if nextClass then
+			pcall(function()
+				UIAction:FireServer("BuyClass", nextClass)
+			end)
+		end
+
 		task.wait(1)
 	end
 end
 
 local function HandleKOTHQuest(questIndex, goal)
 	print("[Quests] KOTH quest")
+
 	local boundary = workspace.Gameplay.KOTH.KOH_BOUNDARY
-	while wExtra.flags.AutoCompleteClanQuests and StillIncomplete(questIndex, goal) do
+
+	while wExtra.flags.AutoCompleteClanQuests
+		and StillIncomplete(questIndex, goal)
+	do
 		local char = player.Character
 		local root = char and char:FindFirstChild("HumanoidRootPart")
+
 		if root then
 			root.AssemblyLinearVelocity = Vector3.zero
 			root.CFrame = boundary.CFrame + Vector3.new(0, 3, 0)
 		end
+
 		task.wait(1)
 	end
 end
 
 local function HandleFlagQuest(questIndex, goal)
 	print("[Quests] Flag quest")
+
 	local flags = workspace.Gameplay.Flags
+
 	local function GetQuestAmount()
 		local quests = GetFreshQuests()
-		if not quests then return 0 end
+
+		if not quests then
+			return 0
+		end
+
 		local q = quests[questIndex]
+
 		return q and (q.Amount or 0) or 0
 	end
-	while wExtra.flags.AutoCompleteClanQuests and StillIncomplete(questIndex, goal) do
+
+	while wExtra.flags.AutoCompleteClanQuests
+		and StillIncomplete(questIndex, goal)
+	do
+
 		for _, flag in ipairs(flags:GetChildren()) do
-			if not StillIncomplete(questIndex, goal) then break end
-			local part = flag:IsA("BasePart") and flag or flag:FindFirstChildWhichIsA("BasePart", true)
-			if part then
-				print("[Quests] Capturing flag:", flag.Name)
-				local beforeAmount = GetQuestAmount()
-				local success = false
-				local elapsed = 0
-				while elapsed < 20 do
-					if not (wExtra.flags.AutoCompleteClanQuests and StillIncomplete(questIndex, goal)) then break end
-					local char = player.Character
-					local root = char and char:FindFirstChild("HumanoidRootPart")
-					if root then
-						root.AssemblyLinearVelocity = Vector3.zero
-						root.CFrame = part.CFrame + Vector3.new(0, 3, 0)
-					end
-					task.wait(1)
-					elapsed = elapsed + 1
-					if GetQuestAmount() > beforeAmount then success = true print("[Quests] Flag counted:", flag.Name) break end
-				end
-				if not success then warn("[Quests] Flag timeout:", flag.Name) end
-				task.wait(1)
+
+			if not StillIncomplete(questIndex, goal) then
+				break
 			end
+
+			local part = flag:IsA("BasePart")
+				and flag
+				or flag:FindFirstChildWhichIsA("BasePart", true)
+
+			if part then -- was: if not part then continue end
+
+			print("[Quests] Capturing flag:", flag.Name)
+
+			local beforeAmount = GetQuestAmount()
+			local success = false
+			local elapsed = 0
+
+			while elapsed < 20 do
+
+				if not (
+					wExtra.flags.AutoCompleteClanQuests
+					and StillIncomplete(questIndex, goal)
+				) then
+					break
+				end
+
+				local char = player.Character
+				local root = char and char:FindFirstChild("HumanoidRootPart")
+
+				if root then
+					root.AssemblyLinearVelocity = Vector3.zero
+					root.CFrame = part.CFrame + Vector3.new(0, 3, 0)
+				end
+
+				task.wait(1)
+				elapsed = elapsed + 1
+
+				local currentAmount = GetQuestAmount()
+
+				-- Quest progress increased = flag counted
+				if currentAmount > beforeAmount then
+					success = true
+					print("[Quests] Flag counted:", flag.Name)
+					break
+				end
+			end
+
+			if not success then
+				warn("[Quests] Flag timeout:", flag.Name)
+			end
+
+			task.wait(1)
+			end -- close if part then
 		end
+
 		task.wait(1)
 	end
 end
 
+-- =======================================================
+-- QUEST EXECUTION
+-- =======================================================
+
 local function RunQuestByType(questType, idx, goal, questText)
-	if questType == "hatch" then HandleHatchQuest(idx, goal, questText)
-	elseif questType == "swing" then HandleSwingQuest(idx, goal)
-	elseif questType == "sell" then HandleSellQuest(idx, goal)
-	elseif questType == "element" then HandleElementQuest(idx, goal)
-	elseif questType == "boss" then HandleBossQuest(idx, goal)
-	elseif questType == "class" then HandleClassQuest(idx, goal)
-	elseif questType == "koth" then HandleKOTHQuest(idx, goal)
-	elseif questType == "flag" then HandleFlagQuest(idx, goal)
+	if questType == "hatch" then
+		HandleHatchQuest(idx, goal, questText)
+
+	elseif questType == "swing" then
+		HandleSwingQuest(idx, goal)
+
+	elseif questType == "sell" then
+		HandleSellQuest(idx, goal)
+
+	elseif questType == "element" then
+		HandleElementQuest(idx, goal)
+
+	elseif questType == "boss" then
+		HandleBossQuest(idx, goal)
+
+	elseif questType == "class" then
+		HandleClassQuest(idx, goal)
+
+	elseif questType == "koth" then
+		HandleKOTHQuest(idx, goal)
+
+	elseif questType == "flag" then
+		HandleFlagQuest(idx, goal)
 	end
 end
 
 local function FindNextQuest()
 	local quests = GetFreshQuests()
-	if not quests then return nil end
+
+	if not quests then
+		return nil
+	end
+
 	for questIndex, qp in pairs(quests) do
 		local qd = QuestInfo.ClanQuests[qp.Id]
+
 		if qd and not IsQuestDone(qp, qd) then
 			local typeDef = QuestInfo.QuestTypes[qd.QuestType]
+
 			if typeDef then
 				local goal = qd.GoalAmount or math.huge
 				local current = qp.Amount or 0
-				local questText = string.lower(typeDef.InfoText(current, goal, qd))
+
+				local questText = string.lower(
+					typeDef.InfoText(current, goal, qd)
+				)
+
 				local questType = ClassifyQuest(questText)
+
 				if questType ~= "unknown" then
-					return { index = questIndex, type = questType, goal = goal, text = questText }
+					return {
+						index = questIndex,
+						type = questType,
+						goal = goal,
+						text = questText,
+					}
 				end
 			end
 		end
 	end
+
 	return nil
 end
 
 local function StartNextQuest()
-	if currentQuestThread then return end
+	if currentQuestThread then
+		return
+	end
+
 	local q = FindNextQuest()
-	if not q then return end
+
+	if not q then
+		return
+	end
+
 	currentQuestIndex = q.index
-	print(string.format("[Quests] Starting [%s]: %s", q.type, q.text))
+
+	print(
+		string.format(
+			"[Quests] Starting [%s]: %s",
+			q.type,
+			q.text
+		)
+	)
+
 	currentQuestThread = task.spawn(function()
-		pcall(function() RunQuestByType(q.type, q.index, q.goal, q.text) end)
+		pcall(function()
+			RunQuestByType(q.type, q.index, q.goal, q.text)
+		end)
+
 		currentQuestThread = nil
 		currentQuestIndex = nil
 	end)
 end
 
 local function StopCurrentQuest()
-	if currentQuestThread then pcall(task.cancel, currentQuestThread) end
+	if currentQuestThread then
+		pcall(task.cancel, currentQuestThread)
+	end
+
 	currentQuestThread = nil
 	currentQuestIndex = nil
 end
 
-wExtra:Toggle("Auto Complete Clan Quests", {flag = "AutoCompleteClanQuests"}, function(v)
-	if not v then StopCurrentQuest() print("[Quests] Stopped.") end
-end)
+-- =======================================================
+-- UI
+-- =======================================================
 
-wExtra:Toggle("Auto Claim Quest Rewards", {flag = "AutoClaimQuestRewards"}, function() end)
+wExtra:Toggle(
+	"Auto Complete Clan Quests",
+	{flag = "AutoCompleteClanQuests"},
+	function(v)
+		if not v then
+			StopCurrentQuest()
+			print("[Quests] Stopped.")
+		end
+	end
+)
+
+wExtra:Toggle(
+	"Auto Claim Quest Rewards",
+	{flag = "AutoClaimQuestRewards"},
+	function()
+	end
+)
+
+-- =======================================================
+-- MAIN LOOP
+-- =======================================================
 
 task.spawn(function()
 	while true do
 		task.wait(3)
+
 		if wExtra and wExtra.flags then
-			if wExtra.flags.AutoClaimQuestRewards then pcall(AutoClaimCompleted) end
-			if wExtra.flags.AutoCompleteClanQuests then
-				if currentQuestIndex then
-					local quests = GetFreshQuests()
-					local qp = quests and quests[currentQuestIndex]
-					if not qp then
-						StopCurrentQuest()
-					else
-						local qd = QuestInfo.ClanQuests[qp.Id]
-						if qd and IsQuestDone(qp, qd) then
-							print("[Quests] Finished:", currentQuestIndex)
-							if wExtra.flags.AutoClaimQuestRewards then
-								pcall(function() UIAction:FireServer("ClaimClanQuest", currentQuestIndex) end)
-							end
-							StopCurrentQuest()
+
+		if wExtra.flags.AutoClaimQuestRewards then
+			pcall(AutoClaimCompleted)
+		end
+
+		if wExtra.flags.AutoCompleteClanQuests then
+			if currentQuestIndex then
+				local quests = GetFreshQuests()
+
+				local qp = quests and quests[currentQuestIndex]
+
+				if not qp then
+					StopCurrentQuest()
+
+				else
+					local qd = QuestInfo.ClanQuests[qp.Id]
+
+					if qd and IsQuestDone(qp, qd) then
+						print("[Quests] Finished:", currentQuestIndex)
+
+						if wExtra.flags.AutoClaimQuestRewards then
+							pcall(function()
+								UIAction:FireServer(
+									"ClaimClanQuest",
+									currentQuestIndex
+								)
+							end)
 						end
+
+						StopCurrentQuest()
 					end
 				end
-				StartNextQuest()
 			end
+
+			StartNextQuest()
 		end
+		end -- close if wExtra and wExtra.flags
 	end
 end)
 
 -- =======================================================
--- TRAVELING MERCHANT
+-- TRAVELING MERCHANT — Auto Buy Window
+-- Reads live listings from TravelingMerchant client data.
+-- Remote: UIAction:FireServer("TravelingMerchantBuyItem", slotIndex, ResetDT)
 -- =======================================================
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players           = game:GetService("Players")
+local player            = Players.LocalPlayer
+
+local UIAction         = ReplicatedStorage:WaitForChild("Events"):WaitForChild("UIAction")
 local TravelingMerchantInfo = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("TravelingMerchantInfo"))
 
+local function GetClientData()
+	local mc = player.PlayerScripts:FindFirstChild("MainClient")
+	if mc then
+		local dm = mc:FindFirstChild("ClientDataManager")
+		if dm then return require(dm) end
+	end
+	return nil
+end
+
+-- -------------------------------------------------------
+-- Build a human-readable label for each listing slot.
+-- The merchant shows up to 5 crown listings (slots 1–5),
+-- picked randomly from TravelingMerchantInfo.Listings.
+-- We label them from the live client data when possible,
+-- and fall back to the full Listings table for the picker.
+-- -------------------------------------------------------
 local function GetListingLabel(listing)
 	if not listing then return "Unknown" end
 	local typeStr = listing.Type or "?"
 	local name    = listing.Name or "?"
 	local amount  = listing.Amount
 	local class   = listing.Class
+
+	-- Clean up name
 	name = name:gsub("Time$", ""):gsub("x5", "x5 "):gsub("AutoSell", "Auto Sell"):gsub("Shield", "Shield")
+
 	local label = typeStr .. ": " .. name
 	if class then label = label .. " [" .. class .. "]" end
 	if amount then label = label .. " x" .. amount end
 	return label
 end
 
+-- Build dropdown list from the full Listings table so the
+-- player can pre-select what they want before the merchant spawns.
 local AllListingLabels  = {}
-local AllListingIndices = {}
+local AllListingIndices = {} -- parallel array: label → 1-based index in Listings
+
 for i, listing in ipairs(TravelingMerchantInfo.Listings) do
 	local label = string.format("[%d] %s", i, GetListingLabel(listing))
 	table.insert(AllListingLabels, label)
 	table.insert(AllListingIndices, i)
 end
 
+-- -------------------------------------------------------
+-- UI
+-- -------------------------------------------------------
 local wMerchant = library:CreateWindow("Traveling Merchant")
 
 wMerchant:Section("Auto Buy Settings")
 
+-- Which listing types to auto-buy (by type name)
 local BuyTypes = {
 	{label = "Boosts",  flag = "MB_Boosts"},
 	{label = "Pets",    flag = "MB_Pets"},
@@ -2595,55 +3040,73 @@ for _, entry in ipairs(BuyTypes) do
 	wMerchant:Toggle("Buy " .. entry.label, {flag = entry.flag}, function() end)
 end
 
+-- Optional: only buy if BuysLeft > 0 (always true in practice, included for safety)
 wMerchant:Section("Filters")
 
+-- Min/max crowns price filter so the player doesn't accidentally
+-- blow all their crowns on a 5M crown listing.
 local MaxCrownsPrice = math.huge
 
 wMerchant:Slider("Max Crowns Price (×1000)", {min = 1, max = 5000, default = 5000, flag = "MB_MaxPrice"}, function(v)
 	MaxCrownsPrice = v * 1000
 end)
-MaxCrownsPrice = 5000 * 1000
+MaxCrownsPrice = 5000 * 1000 -- default: no cap
 
 wMerchant:Section("Automation")
 
 local MerchantThread = nil
 
 local function BuyMerchantSlot(slotIndex, resetDT)
-	pcall(function() UIAction:FireServer("TravelingMerchantBuyItem", slotIndex, resetDT) end)
+	pcall(function()
+		UIAction:FireServer("TravelingMerchantBuyItem", slotIndex, resetDT)
+	end)
 end
 
 local function RunMerchantBuy()
 	local mgr = GetClientData()
 	if not mgr or not mgr.Data then return end
+
 	local merchantData = mgr.Data.TravelingMerchant
 	if not merchantData then return end
-	local items   = merchantData.Items
-	local resetDT = merchantData.ResetDT
+
+	local items    = merchantData.Items
+	local resetDT  = merchantData.ResetDT
+
 	if not items then return end
+
+	-- items is a table of {Index, BuysLeft} keyed 1–5
 	for slotIndex, item in pairs(items) do
-		if slotIndex <= 5 then
+		if slotIndex <= 5 then -- slots 1-5 are crown listings
 			local listingDef = TravelingMerchantInfo.Listings[item.Index]
 			if listingDef then
 				local buysLeft = item.BuysLeft or 0
-				if buysLeft > 0 then
+				if buysLeft > 0 then -- skip if already sold out
+					-- Type filter
 					local typeOk = false
 					for _, entry in ipairs(BuyTypes) do
 						if wMerchant.flags[entry.flag] and listingDef.Type == entry.label then
-							typeOk = true break
+							typeOk = true
+							break
 						end
 					end
+
 					if typeOk then
+						-- Price filter
 						local price = listingDef.CrownsPrice or math.huge
 						if price > MaxCrownsPrice then
-							print(string.format("[Merchant] Skipping slot %d (%s) — price %d > max %d", slotIndex, GetListingLabel(listingDef), price, MaxCrownsPrice))
+							print(string.format("[Merchant] Skipping slot %d (%s) — price %d > max %d",
+								slotIndex, GetListingLabel(listingDef), price, MaxCrownsPrice))
 						else
+							-- Buy as many times as allowed (MaxBuys respected by BuysLeft)
 							local bought = 0
 							while bought < buysLeft do
 								BuyMerchantSlot(slotIndex, resetDT)
 								bought = bought + 1
 								task.wait(0.4)
 							end
-							print(string.format("[Merchant] Bought slot %d: %s x%d", slotIndex, GetListingLabel(listingDef), bought))
+
+							print(string.format("[Merchant] Bought slot %d: %s x%d",
+								slotIndex, GetListingLabel(listingDef), bought))
 						end
 					end
 				end
@@ -2652,21 +3115,31 @@ local function RunMerchantBuy()
 	end
 end
 
-wMerchant:Button("Buy Now (Once)", function() task.spawn(RunMerchantBuy) end)
+wMerchant:Button("Buy Now (Once)", function()
+	task.spawn(RunMerchantBuy)
+end)
 
 wMerchant:Toggle("Auto Buy Every Restock", {flag = "AutoBuyMerchant"}, function(v)
-	if MerchantThread then task.cancel(MerchantThread) MerchantThread = nil end
+	if MerchantThread then
+		task.cancel(MerchantThread)
+		MerchantThread = nil
+	end
 	if not v then return end
+
 	MerchantThread = task.spawn(function()
+		-- Track last known ResetDT so we only buy once per merchant cycle
 		local lastResetDT = nil
+
 		while wMerchant.flags.AutoBuyMerchant do
 			local mgr = GetClientData()
 			if mgr and mgr.Data and mgr.Data.TravelingMerchant then
 				local resetDT = mgr.Data.TravelingMerchant.ResetDT
+
 				if resetDT ~= lastResetDT then
+					-- New merchant cycle detected
 					lastResetDT = resetDT
 					print("[Merchant] New restock detected — buying now.")
-					task.wait(1)
+					task.wait(1) -- brief settle before buying
 					pcall(RunMerchantBuy)
 				end
 			end
@@ -2690,93 +3163,55 @@ wMerchant:Button("Print Current Listings", function()
 	for slotIndex, item in pairs(items) do
 		local def = TravelingMerchantInfo.Listings[item.Index]
 		if def then
-			print(string.format("  Slot %d | %s | Price: %s crowns | BuysLeft: %d", slotIndex, GetListingLabel(def), tostring(def.CrownsPrice), item.BuysLeft or 0))
+			print(string.format("  Slot %d | %s | Price: %s crowns | BuysLeft: %d",
+				slotIndex,
+				GetListingLabel(def),
+				tostring(def.CrownsPrice),
+				item.BuysLeft or 0
+			))
 		end
 	end
 	print("=============================================")
 end)
 
 -- =======================================================
--- TAB: MISC — Client-side cosmetic spoofs + Settings
+-- TAB: MISC — Client-side cosmetic spoofs
+-- All purely visual / local; no server communication.
 -- =======================================================
 local wMisc = library:CreateWindow("Misc")
 
--- ───────────────────────────────────────────────────────
--- SETTINGS PERSISTENCE UI
--- ───────────────────────────────────────────────────────
-wMisc:Section("Settings Persistence")
-
--- The master toggle itself: note we DON'T use win:Toggle here because
--- AutoSaveEnabled is a top-level Lua variable, not a flags entry.
--- We use CreateToggle directly so it doesn't get caught in save/load loops.
-wMisc:Toggle("Auto-Save Settings", {flag = "AutoSaveSettings"}, function(v)
-    AutoSaveEnabled = v
-    if v then
-        SaveAllSettings()
-        Luna:Notification({
-            Title = "ARAB HUB",
-            Icon = "save",
-            ImageSource = "Material",
-            Content = "Settings will be saved automatically."
-        })
-    else
-        Luna:Notification({
-            Title = "ARAB HUB",
-            Icon = "save",
-            ImageSource = "Material",
-            Content = "Auto-save disabled. Settings won't persist on next load."
-        })
-    end
-end)
-
-wMisc:Button("Save Settings Now", function()
-    SaveAllSettings()
-    Luna:Notification({
-        Title = "ARAB HUB",
-        Icon = "check_circle",
-        ImageSource = "Material",
-        Content = "Settings saved to disk!"
-    })
-end)
-
-wMisc:Button("Clear Saved Settings", function()
-    pcall(function()
-        if writefile then writefile(SETTINGS_CACHE_FILE, "") end
-    end)
-    AutoSaveEnabled = true
-    Luna:Notification({
-        Title = "ARAB HUB",
-        Icon = "delete",
-        ImageSource = "Material",
-        Content = "Saved settings cleared. Toggles will reset on next load."
-    })
-end)
-
--- ───────────────────────────────────────────────────────
--- CLIENT COSMETICS
--- ───────────────────────────────────────────────────────
 wMisc:Section("Client Cosmetics")
 
-local MiscConn = nil
+-- Shared state
+local MiscConn = nil -- single RenderStepped connection drives all active misc flags
 
 local function StopMiscLoop()
-    if MiscConn then MiscConn:Disconnect() MiscConn = nil end
+    if MiscConn then
+        MiscConn:Disconnect()
+        MiscConn = nil
+    end
 end
 
 local function AnyMiscActive()
-    return wMisc.flags.MiscBadges or wMisc.flags.MiscFireLevel or wMisc.flags.MiscDisplayName
+    return wMisc.flags.MiscBadges
+        or wMisc.flags.MiscFireLevel
+        or wMisc.flags.MiscDisplayName
 end
 
 local function StartMiscLoop()
-    if MiscConn then return end
+    if MiscConn then return end -- already running
     MiscConn = RunService.Heartbeat:Connect(function()
-        if not AnyMiscActive() then StopMiscLoop() return end
+        if not AnyMiscActive() then
+            StopMiscLoop()
+            return
+        end
 
         local char = player.Character
         local head = char and char:FindFirstChild("Head")
         local rankGui = head and head:FindFirstChild("RankingGui")
         if not rankGui then return end
 
+        -- Leaderboard badges → #1
         if wMisc.flags.MiscBadges then
             for _, containerName in ipairs({"LeaderboardBadges", "LeaderboardBadgesSmall"}) do
                 local folder = rankGui:FindFirstChild(containerName)
@@ -2786,26 +3221,37 @@ local function StartMiscLoop()
                         if badge:IsA("ImageLabel") or badge:IsA("Frame") then
                             badge.Visible = true
                             local lbl = badge:FindFirstChild("Amount") or badge:FindFirstChildOfClass("TextLabel")
-                            if lbl then lbl.Visible = true lbl.Text = "#1" end
+                            if lbl then
+                                lbl.Visible = true
+                                lbl.Text = "#1"
+                            end
                         end
                     end
                 end
             end
         end
 
+        -- Fire element level → 9999
         if wMisc.flags.MiscFireLevel then
             local imgFrame = rankGui:FindFirstChild("ImageFrame")
             local element  = imgFrame and imgFrame:FindFirstChild("Element")
             local amount   = element and element:FindFirstChild("Amount")
-            if amount and amount:IsA("TextLabel") then amount.Text = "9999" end
+            if amount and amount:IsA("TextLabel") then
+                amount.Text = "9999"
+            end
         end
 
+        -- Rainbow display name spoof → ARABHUB
         if wMisc.flags.MiscDisplayName then
             local rainbow = Color3.fromHSV((tick() % 5) / 5, 1, 1)
+
             for _, obj in ipairs(rankGui:GetDescendants()) do
                 if obj:IsA("TextLabel") then
-                    if obj.Name == "PName" or obj.Name == "NameLabel"
-                    or obj.Text == player.Name or obj.Text == player.DisplayName then
+                    if obj.Name == "PName"
+                    or obj.Name == "NameLabel"
+                    or obj.Text == player.Name
+                    or obj.Text == player.DisplayName then
+
                         obj.Text = "ARABHUB"
                         obj.TextColor3 = rainbow
                     end
@@ -2831,15 +3277,301 @@ end -- loadMainHub
 
 -- ==========================================
 -- KEY CACHE CHECK — runs here so loadMainHub() is already defined above.
+-- Checks _G first (same session), then reads from file (survives rejoins).
 -- ==========================================
 local cachedToken = LoadCachedKey()
 if cachedToken then
     if ValidateToken(cachedToken) then
+        -- Still valid — save back to both layers and skip the key GUI
         SaveKey(cachedToken)
         local existingGui = game:GetService("CoreGui"):FindFirstChild("ARABHubKeySystem")
         if existingGui then existingGui:Destroy() end
         loadMainHub()
     else
+        -- Expired — clear both layers so the GUI shows normally
         ClearKey()
     end
 end
+
+
+-- =======================================================
+-- AUTO SAVE / RESTORE TOGGLE STATES
+-- Saves all wDungeon/wFarm/wElement/wExtra/wHatch/wMisc
+-- flags to a JSON file so they restore on next execution.
+-- =======================================================
+local CONFIG_FILE = "ARABHub_config.json"
+
+local function SaveConfig()
+    local snapshot = {}
+    local windows = {
+        {win = wFarm,    name = "wFarm"},
+        {win = wHatch,   name = "wHatch"},
+        {win = wDex,     name = "wDex"},
+        {win = wDungeon, name = "wDungeon"},
+        {win = wElement, name = "wElement"},
+        {win = wExtra,   name = "wExtra"},
+        {win = wMisc,    name = "wMisc"},
+        {win = wMerchant,name = "wMerchant"},
+    }
+    for _, entry in ipairs(windows) do
+        snapshot[entry.name] = {}
+        for flag, val in pairs(entry.win.flags) do
+            -- Only save booleans (toggles) and numbers (sliders)
+            if type(val) == "boolean" or type(val) == "number" then
+                snapshot[entry.name][flag] = val
+            end
+        end
+    end
+    pcall(function()
+        if writefile then
+            writefile(CONFIG_FILE, HttpService:JSONEncode(snapshot))
+        end
+    end)
+end
+
+local function LoadConfig()
+    local ok, raw = pcall(function()
+        if readfile then return readfile(CONFIG_FILE) end
+        return nil
+    end)
+    if not ok or not raw or raw == "" then return nil end
+    local dok, data = pcall(function() return HttpService:JSONDecode(raw) end)
+    if not dok or not data then return nil end
+    return data
+end
+
+-- Map window name → window object for restore
+local WindowMap = {
+    wFarm     = wFarm,
+    wHatch    = wHatch,
+    wDex      = wDex,
+    wDungeon  = wDungeon,
+    wElement  = wElement,
+    wExtra    = wExtra,
+    wMisc     = wMisc,
+    wMerchant = wMerchant,
+}
+
+-- Flags that should NOT be auto-restored (one-shot actions or
+-- features that could cause issues if silently re-enabled)
+local SkipFlags = {
+    AutoRunDungeons  = true, -- re-enabled below with a delay
+    AutoFarmDungeon  = true,
+    AutoClaimChest   = true,
+}
+
+-- Flags that ARE safe to auto-restore after a short delay
+-- (dungeons need the game to fully load before re-enabling)
+local DelayedFlags = {
+    AutoRunDungeons = {win = "wDungeon", delay = 8},
+    AutoFarmDungeon = {win = "wDungeon", delay = 5},
+    AutoClaimChest  = {win = "wDungeon", delay = 5},
+}
+
+local function RestoreConfig()
+    local saved = LoadConfig()
+    if not saved then
+        print("[AutoSave] No config found, starting fresh.")
+        return
+    end
+
+    print("[AutoSave] Restoring config...")
+
+    for winName, flags in pairs(saved) do
+        local win = WindowMap[winName]
+        if win then
+            for flag, val in pairs(flags) do
+                if not SkipFlags[flag] then
+                    win.flags[flag] = val
+                    -- If it's a true boolean toggle, fire its callback to
+                    -- actually start the loop (Luna flags alone don't start loops)
+                    if val == true then
+                        -- Re-fire by simulating a toggle-on for known loop starters
+                        task.spawn(function()
+                            task.wait(2) -- brief settle after GUI loads
+                            -- The loops check their own flag each tick,
+                            -- so just setting the flag is enough for
+                            -- Heartbeat/Stepped-driven loops.
+                            -- For task.spawn loops we need to re-trigger:
+                            local triggerMap = {
+                                -- wFarm loops
+                                AutoBuySaber    = function() StartShopLoop("AutoBuySaber",    "BuyAllWeapons",    wFarm) end,
+                                AutoBuyDNA      = function() StartShopLoop("AutoBuyDNA",      "BuyAllDNAs",       wFarm) end,
+                                AutoBuyBossHits = function() StartShopLoop("AutoBuyBossHits", "BuyAllBossBoosts", wFarm) end,
+                                AutoBuyAuras    = function() StartShopLoop("AutoBuyAuras",    "BuyAllAuras",      wFarm) end,
+                                AutoBuyPetAuras = function() StartShopLoop("AutoBuyPetAuras", "BuyAllPetAuras",   wFarm) end,
+                                AutoClaimDaily  = function()
+                                    task.spawn(function()
+                                        while wFarm.flags.AutoClaimDaily do
+                                            UIAction:FireServer("ClaimDailyTimedReward")
+                                            task.wait(1)
+                                        end
+                                    end)
+                                end,
+                                -- wHatch
+                                AutoHatchSelected = function()
+                                    task.spawn(function()
+                                        while wHatch.flags.AutoHatchSelected do
+                                            pcall(function() UIAction:FireServer("BuyEgg", SelectedHatchEgg) end)
+                                            task.wait(0.25)
+                                        end
+                                    end)
+                                end,
+                                -- wDex
+                                AutoCompleteDex = function()
+                                    task.spawn(function()
+                                        while wDex.flags.AutoCompleteDex do
+                                            local clientManager = GetClientData()
+                                            if clientManager and clientManager.Data then
+                                                local myIndex   = clientManager.Data.Index or {}
+                                                local safeLimit = #EggProgressionOrder - SkipCount
+                                                local targetEgg = nil
+                                                for i = 1, safeLimit do
+                                                    local eggName = EggProgressionOrder[i]
+                                                    local pets    = MasterEggDatabase[eggName]
+                                                    if pets then
+                                                        local incomplete = false
+                                                        for _, petName in ipairs(pets) do
+                                                            if not table.find(myIndex, petName) then incomplete = true break end
+                                                        end
+                                                        if incomplete then targetEgg = eggName break end
+                                                    end
+                                                end
+                                                if targetEgg then
+                                                    pcall(function() UIAction:FireServer("BuyEgg", targetEgg) end)
+                                                    task.wait(0.2)
+                                                else
+                                                    task.wait(2)
+                                                end
+                                            else
+                                                task.wait(1)
+                                            end
+                                        end
+                                    end)
+                                end,
+                            }
+                            local cb = triggerMap[flag]
+                            if cb and win.flags[flag] then pcall(cb) end
+                        end)
+                    end
+                end
+            end
+        end
+    end
+
+    -- Restore delayed/sensitive flags separately with longer waits
+    for flag, info in pairs(DelayedFlags) do
+        local win = WindowMap[info.win]
+        if win and saved[info.win] and saved[info.win][flag] == true then
+            task.spawn(function()
+                task.wait(info.delay)
+                if not win.flags[flag] then -- don't double-start
+                    win.flags[flag] = true
+                    print("[AutoSave] Delayed-restore: " .. flag)
+                    -- Re-fire the toggle callback manually
+                    if flag == "AutoRunDungeons" then
+                        -- Duplicate the Auto Run Dungeons loop inline
+                        task.spawn(function()
+                            print("[Dungeon] Auto Run loop started (restored)")
+                            while wDungeon.flags.AutoRunDungeons do
+                                if IsInsideDungeon() then
+                                    while wDungeon.flags.AutoRunDungeons and IsInsideDungeon() do task.wait(2) end
+                                    task.wait(3)
+                                end
+                                if not wDungeon.flags.AutoRunDungeons then break end
+                                local cd = GetDungeonCooldown()
+                                if cd > 0 then
+                                    while wDungeon.flags.AutoRunDungeons do
+                                        task.wait(1)
+                                        if GetDungeonCooldown() == 0 then break end
+                                    end
+                                else
+                                    local started = false
+                                    pcall(function() started = CreateAndStartDungeon() end)
+                                    if started then
+                                        local lw = 0
+                                        while not IsInsideDungeon() and lw < 20 and wDungeon.flags.AutoRunDungeons do
+                                            task.wait(1) lw = lw + 1
+                                        end
+                                        if IsInsideDungeon() then
+                                            WaitForDungeonBossAndClaimChest(300)
+                                        end
+                                        local settle = 0
+                                        repeat task.wait(2) settle = settle + 2
+                                        until GetDungeonCooldown() > 0 or settle >= 30
+                                        if GetDungeonCooldown() == 0 then task.wait(60) end
+                                    else
+                                        task.wait(15)
+                                    end
+                                end
+                            end
+                        end)
+                    elseif flag == "AutoFarmDungeon" then
+                        local conn2
+                        local function resetOri()
+                            local c = player.Character
+                            local r = c and c:FindFirstChild("HumanoidRootPart")
+                            if r then r.AssemblyLinearVelocity = Vector3.zero r.CFrame = CFrame.new(r.Position) end
+                        end
+                        conn2 = RunService.Stepped:Connect(function()
+                            if not wDungeon.flags.AutoFarmDungeon then conn2:Disconnect() resetOri() return end
+                            if not IsInsideDungeon() then return end
+                            local c = player.Character
+                            local r = c and c:FindFirstChild("HumanoidRootPart")
+                            local b = FindActiveBotChild()
+                            if r and b then
+                                r.AssemblyLinearVelocity = Vector3.zero
+                                r.AssemblyAngularVelocity = Vector3.zero
+                                r.CFrame = CFrame.fromMatrix(b.Position + Vector3.new(0, dungeonHeightOffset, 0), customRightVector, customUpVector, -customLookVector)
+                            elseif r then
+                                r.AssemblyLinearVelocity = Vector3.zero r.CFrame = CFrame.new(r.Position)
+                            end
+                        end)
+                    elseif flag == "AutoClaimChest" then
+                        task.spawn(function()
+                            while wDungeon.flags.AutoClaimChest do
+                                task.wait(0.3)
+                                local ds = workspace:FindFirstChild("DungeonStorage")
+                                if not ds then continue end
+                                for _, dungeon in ipairs(ds:GetChildren()) do
+                                    local r = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+                                    if not r then continue end
+                                    local prompt = dungeon:FindFirstChildWhichIsA("ProximityPrompt", true)
+                                    if prompt then
+                                        local part = prompt.Parent
+                                        if part and part:IsA("BasePart") then
+                                            r.AssemblyLinearVelocity = Vector3.zero
+                                            r.CFrame = part.CFrame + Vector3.new(0, 3, 0)
+                                            task.wait(0.4)
+                                            fireproximityprompt(prompt)
+                                        end
+                                    end
+                                end
+                            end
+                        end)
+                    end
+                end
+            end)
+        end
+    end
+
+    print("[AutoSave] Config restored.")
+end
+
+-- Save every 10 seconds in the background
+task.spawn(function()
+    while true do
+        task.wait(10)
+        pcall(SaveConfig)
+    end
+end)
+
+-- Also save on teleport/disconnect (best-effort)
+game:GetService("Players").LocalPlayer.OnTeleport:Connect(function()
+    pcall(SaveConfig)
+end)
+
+-- Restore immediately
+RestoreConfig()
+
+
