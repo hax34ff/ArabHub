@@ -445,7 +445,7 @@ local function UpdateFlag(flag, value)
 end
 
 -- Global State
-local dungeonHeightOffset = 0
+local dungeonHeightOffset = RegisterFlag("DungeonHeightOffset", 10)
 local SkipCount           = 0
 
 -- Vector Orientations (controls player angle when farming)
@@ -1752,12 +1752,28 @@ pcall(function()
 		for i, diff in ipairs(DungeonInfo.Difficulties) do
 			if diff.Name == selected then
 				SelectedDiffIndex = i
+				UpdateFlag("DungeonDiff", selected)
 				print("[Dungeon] Selected difficulty index: " .. i .. " (" .. selected .. ")")
 				break
 			end
 		end
 	end)
-	SelectedDiffIndex = 1 -- force-init to first
+	-- Force difficulty to Impossible and persist it
+	local function ApplyImpossible()
+		for i, diff in ipairs(DungeonInfo.Difficulties) do
+			if diff.Name == "Impossible" then
+				SelectedDiffIndex = i
+				UpdateFlag("DungeonDiff", "Impossible")
+				print("[Dungeon] Difficulty locked to Impossible (index " .. i .. ")")
+				return
+			end
+		end
+		-- Fallback: Impossible not found, use last difficulty
+		SelectedDiffIndex = #DungeonInfo.Difficulties
+		UpdateFlag("DungeonDiff", DungeonInfo.Difficulties[SelectedDiffIndex] and DungeonInfo.Difficulties[SelectedDiffIndex].Name or "Unknown")
+		warn("[Dungeon] 'Impossible' not found in DifficultyNameList — defaulted to last entry")
+	end
+	ApplyImpossible()
 end)
 
 -- Party type: use explicit button-style toggles so Luna can't corrupt the value
@@ -1863,15 +1879,13 @@ wDungeon:Section("Cooldown Status")
 -- =======================================================
 wDungeon:Section("Farming")
 
-dungeonHeightOffset = 0
-wDungeon:Button("Boss Height: " .. dungeonHeightOffset .. " (tap to cycle)", function()
-	local steps = {0, 2, 4, 6, 8, 9, 10}
-	local next = 1
-	for i, v in ipairs(steps) do
-		if v == dungeonHeightOffset then next = (i % #steps) + 1 break end
-	end
-	dungeonHeightOffset = steps[next]
-	print("[Dungeon] Boss Height Offset set to: " .. dungeonHeightOffset)
+dungeonHeightOffset = 10
+UpdateFlag("DungeonHeightOffset", 10)
+wDungeon:Button("Boss Height: " .. dungeonHeightOffset .. " (fixed)", function()
+	-- Height is fixed at 10 and auto-saved; button is informational only
+	dungeonHeightOffset = 10
+	UpdateFlag("DungeonHeightOffset", 10)
+	print("[Dungeon] Boss Height Offset is fixed at: " .. dungeonHeightOffset)
 end)
 
 wDungeon:Toggle("Auto Farm Dungeon", {flag = "AutoFarmDungeon"}, function(v)
