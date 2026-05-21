@@ -528,9 +528,10 @@ function library:CreateWindow(name)
             win.flags[flag] = defaultValue
         end
 
-        local toggleObj = Tab:CreateToggle({
+        local ToggleObj = Tab:CreateToggle({
             Name = label,
-            Default = defaultValue,
+            CurrentValue = defaultValue,
+            Flag = flag,
 
             Callback = function(v)
                 if flag then
@@ -545,14 +546,19 @@ function library:CreateWindow(name)
         })
 
         -- Store so we can force the visual ON after all tabs are built
-        if flag and toggleObj then
-            ToggleRegistry[flag] = toggleObj
+        if flag and ToggleObj then
+            ToggleRegistry[flag] = ToggleObj
         end
 
-        -- auto-run callback for restored toggles
+        -- force UI toggle state to match saved config
         task.spawn(function()
             task.wait(0.2)
 
+            if ToggleObj and ToggleObj.Set then
+                ToggleObj:Set(defaultValue)
+            end
+
+            -- auto-run callback for restored toggles
             if defaultValue and cb then
                 pcall(cb, defaultValue)
             end
