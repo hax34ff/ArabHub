@@ -1801,21 +1801,45 @@ pcall(function()
 		end
 	end)
 -- Restore saved difficulty, or default to Impossible
-	local function ApplyImpossible()
-		local savedDiff = ConfigFlags["DungeonDiff"]
-		local targetName = (type(savedDiff) == "string" and savedDiff ~= "") and savedDiff or "Impossible"
-		for i, diff in ipairs(DungeonInfo.Difficulties) do
-			if diff.Name == targetName then
-				SelectedDiffIndex = i
-				print("[Dungeon] Difficulty restored to: " .. targetName .. " (index " .. i .. ")")
-				return
-			end
-		end
-		-- Fallback if saved name not found
-		SelectedDiffIndex = #DungeonInfo.Difficulties
-		warn("[Dungeon] Saved difficulty '" .. tostring(targetName) .. "' not found — defaulted to last entry")
-	end
-	ApplyImpossible()
+local function ApplyImpossible()
+    local savedDiff = ConfigFlags["DungeonDiff"]
+    local targetName = (type(savedDiff) == "string" and savedDiff ~= "") and savedDiff or "Impossible"
+
+    for i, diff in ipairs(DungeonInfo.Difficulties) do
+        if diff.Name == targetName then
+            SelectedDiffIndex = i
+
+            -- force dropdown UI update
+            task.spawn(function()
+                task.wait(0.2)
+
+                if DungeonDifficultyDropdown and DungeonDifficultyDropdown.Set then
+                    DungeonDifficultyDropdown:Set(diff.Name)
+                end
+            end)
+
+            print("[Dungeon] Difficulty restored to: " .. targetName .. " (index " .. i .. ")")
+            return
+        end
+    end
+
+    -- fallback
+    SelectedDiffIndex = #DungeonInfo.Difficulties
+
+    task.spawn(function()
+        task.wait(0.2)
+
+        local fallback = DungeonInfo.Difficulties[#DungeonInfo.Difficulties]
+
+        if DungeonDifficultyDropdown and DungeonDifficultyDropdown.Set then
+            DungeonDifficultyDropdown:Set(fallback.Name)
+        end
+    end)
+
+    warn("[Dungeon] Saved difficulty '" .. tostring(targetName) .. "' not found — defaulted to last entry")
+end
+
+ApplyImpossible()
 -- Party type: use explicit button-style toggles so Luna can't corrupt the value
 wDungeon:Section("Party Type")
 wDungeon:Button("Set Public (currently: " .. SelectedGroupType .. ")", function()
