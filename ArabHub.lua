@@ -3274,364 +3274,527 @@ wMisc:Toggle("Display Name (ARABHUB)", {flag = "MiscDisplayName"}, function(v)
 end)
 
 -- =======================================================
--- AUTO SAVE / RESTORE
+-- AUTO SAVE / RESTORE TOGGLE STATES
+-- Replace everything from "AUTO SAVE / RESTORE TOGGLE STATES"
+-- down to the final RestoreConfig() call with this block.
 -- =======================================================
 local CONFIG_FILE = "ARABHub_config.json"
 
+-- All windows we track
+local WindowMap = {
+    wFarm     = wFarm,
+    wHatch    = wHatch,
+    wDex      = wDex,
+    wDungeon  = wDungeon,
+    wElement  = wElement,
+    wExtra    = wExtra,
+    wMisc     = wMisc,
+    wMerchant = wMerchant,
+}
+
+-- Flags that need a delay before restoring (heavy loops that require
+-- the game world to be fully loaded first)
+local DelayedFlags = {
+    AutoRunDungeons = 10,
+    AutoFarmDungeon = 6,
+    AutoClaimChest  = 6,
+}
+
+-- -------------------------------------------------------
+-- Save: snapshot every flag (bool + number) to JSON file
+-- -------------------------------------------------------
 local function SaveConfig()
-    local data = {}
-    local wins = {
-        wFarm=wFarm, wHatch=wHatch, wDex=wDex,
-        wDungeon=wDungeon, wElement=wElement,
-        wExtra=wExtra, wMisc=wMisc, wMerchant=wMerchant
-    }
-    for name, win in pairs(wins) do
-        data[name] = {}
+    local snapshot = {}
+    for winName, win in pairs(WindowMap) do
+        snapshot[winName] = {}
         for flag, val in pairs(win.flags) do
             if type(val) == "boolean" or type(val) == "number" then
-                data[name][flag] = val
+                snapshot[winName][flag] = val
             end
         end
     end
     pcall(function()
-        writefile(CONFIG_FILE, HttpService:JSONEncode(data))
-    end)
-    print("[AutoSave] Saved.")
-end
-
-local function LoadConfig()
-    local ok, raw = pcall(readfile, CONFIG_FILE)
-    if not ok or not raw or raw == "" then return nil end
-    local ok2, data = pcall(function() return HttpService:JSONDecode(raw) end)
-    return ok2 and data or nil
-end
-
-local function FireToggleOn(flag)
-    if flag == "AutoBuySaber"        then StartShopLoop("AutoBuySaber",    "BuyAllWeapons",    wFarm)
-    elseif flag == "AutoBuyDNA"      then StartShopLoop("AutoBuyDNA",      "BuyAllDNAs",       wFarm)
-    elseif flag == "AutoBuyBossHits" then StartShopLoop("AutoBuyBossHits", "BuyAllBossBoosts", wFarm)
-    elseif flag == "AutoBuyAuras"    then StartShopLoop("AutoBuyAuras",    "BuyAllAuras",      wFarm)
-    elseif flag == "AutoBuyPetAuras" then StartShopLoop("AutoBuyPetAuras", "BuyAllPetAuras",   wFarm)
-
-    elseif flag == "AutoClaimDaily" then
-        task.spawn(function()
-            while wFarm.flags.AutoClaimDaily do
-                UIAction:FireServer("ClaimDailyTimedReward")
-                task.wait(1)
-            end
-        end)
-
-    elseif flag == "AutoBuyClass" then
-        local c; c = RunService.Heartbeat:Connect(function()
-            if not wFarm.flags.AutoBuyClass then c:Disconnect() return end
-            local nc = GetNextClass()
-            if nc then UIAction:FireServer("BuyClass", nc) end
-        end)
-
-    elseif flag == "SellStrength" then
-        local c; c = RunService.Heartbeat:Connect(function()
-            if not wFarm.flags.SellStrength then c:Disconnect() return end
-            SellStrength:FireServer()
-        end)
-
-    elseif flag == "HitboxExtender" then
-        local c; c = RunService.Heartbeat:Connect(function()
-            if not wFarm.flags.HitboxExtender then
-                c:Disconnect()
-                for _, mob in ipairs(GetAllMobs()) do ResetMobHitbox(mob) end
-                return
-            end
-            for _, mob in ipairs(GetAllMobs()) do
-                local hp = mob:GetAttribute("Health")
-                local root = mob:FindFirstChild("HumanoidRootPart")
-                if root and root:IsA("BasePart") then
-                    if hp and tonumber(hp) > 0 then
-                        root.Size = Vector3.new(60,60,60)
-                        root.Transparency = 0.75
-                        root.Color = Color3.fromRGB(0,180,255)
-                        root.Material = Enum.Material.Neon
-                        root.CanCollide = false
-                    else ResetMobHitbox(mob) end
-                end
-            end
-        end)
-
-    elseif flag == "AutoHatchSelected" then
-        task.spawn(function()
-            while wHatch.flags.AutoHatchSelected do
-                pcall(function() UIAction:FireServer("BuyEgg", SelectedHatchEgg) end)
-                task.wait(0.25)
-            end
-        end)
-
-    elseif flag == "AutoCompleteDex" then
-        task.spawn(function()
-            while wDex.flags.AutoCompleteDex do
-                local cm = GetClientData()
-                if cm and cm.Data then
-                    local myIndex = cm.Data.Index or {}
-                    local safeLimit = #EggProgressionOrder - SkipCount
-                    local targetEgg = nil
-                    for i = 1, safeLimit do
-                        local en = EggProgressionOrder[i]
-                        local pets = MasterEggDatabase[en]
-                        if pets then
-                            local incomplete = false
-                            for _, pn in ipairs(pets) do
-                                if not table.find(myIndex, pn) then incomplete = true break end
-                            end
-                            if incomplete then targetEgg = en break end
-                        end
-                    end
-                    if targetEgg then
-                        pcall(function() UIAction:FireServer("BuyEgg", targetEgg) end)
-                        task.wait(0.2)
-                    else task.wait(2) end
-                else task.wait(1) end
-            end
-        end)
-
-    elseif flag == "AutoRedeemDexRewards" then
-        task.spawn(function()
-            while wDex.flags.AutoRedeemDexRewards do
-                pcall(function()
-                    local cm = GetClientData()
-                    if cm and cm.Data then
-                        local claimed = cm.Data.PetdexRewardsClaimed or {}
-                        for rk, rd in pairs(PetdexRewardInfo.Items) do
-                            if not wDex.flags.AutoRedeemDexRewards then break end
-                            if not table.find(claimed, rk) then
-                                local eligible = false
-                                if rd.PetsNeeded then
-                                    eligible = PetdexRewardInfo:GetNumPetsDiscovered(cm.Data) >= rd.PetsNeeded
-                                elseif rd.EggsNeeded then
-                                    eligible = PetdexRewardInfo:GetNumEggsCompleted(cm.Data) >= rd.EggsNeeded
-                                end
-                                if eligible then UIAction:FireServer("ClaimPetdexReward", rk) task.wait(0.4) end
-                            end
-                        end
-                    end
-                end)
-                task.wait(4)
-            end
-        end)
-
-    elseif flag == "AutoRunDungeons" then
-        task.spawn(function()
-            print("[Dungeon] Auto Run loop started (restored)")
-            while wDungeon.flags.AutoRunDungeons do
-                if IsInsideDungeon() then
-                    while wDungeon.flags.AutoRunDungeons and IsInsideDungeon() do task.wait(2) end
-                    task.wait(3)
-                end
-                if not wDungeon.flags.AutoRunDungeons then break end
-                local cd = GetDungeonCooldown()
-                if cd > 0 then
-                    while wDungeon.flags.AutoRunDungeons do
-                        task.wait(1)
-                        if GetDungeonCooldown() == 0 then break end
-                    end
-                else
-                    local started = false
-                    pcall(function() started = CreateAndStartDungeon() end)
-                    if started then
-                        local lw = 0
-                        while not IsInsideDungeon() and lw < 20 and wDungeon.flags.AutoRunDungeons do
-                            task.wait(1) lw = lw + 1
-                        end
-                        if IsInsideDungeon() then WaitForDungeonBossAndClaimChest(300) end
-                        local settle = 0
-                        repeat task.wait(2) settle = settle + 2
-                        until GetDungeonCooldown() > 0 or settle >= 30
-                        if GetDungeonCooldown() == 0 then task.wait(60) end
-                    else task.wait(15) end
-                end
-            end
-        end)
-
-    elseif flag == "AutoFarmDungeon" then
-        local conn2
-        local function ro()
-            local c = player.Character
-            local r = c and c:FindFirstChild("HumanoidRootPart")
-            if r then r.AssemblyLinearVelocity = Vector3.zero r.CFrame = CFrame.new(r.Position) end
+        if writefile then
+            writefile(CONFIG_FILE, HttpService:JSONEncode(snapshot))
         end
-        conn2 = RunService.Stepped:Connect(function()
-            if not wDungeon.flags.AutoFarmDungeon then conn2:Disconnect() ro() return end
-            if not IsInsideDungeon() then return end
-            local c = player.Character
-            local r = c and c:FindFirstChild("HumanoidRootPart")
-            local b = FindActiveBotChild()
-            if r and b then
-                r.AssemblyLinearVelocity = Vector3.zero
-                r.AssemblyAngularVelocity = Vector3.zero
-                r.CFrame = CFrame.fromMatrix(b.Position + Vector3.new(0,dungeonHeightOffset,0), customRightVector, customUpVector, -customLookVector)
-            elseif r then
-                r.AssemblyLinearVelocity = Vector3.zero
-                r.CFrame = CFrame.new(r.Position)
-            end
-        end)
-
-    elseif flag == "AutoClaimChest" then
-        task.spawn(function()
-            while wDungeon.flags.AutoClaimChest do
-                task.wait(0.3)
-                local ds = workspace:FindFirstChild("DungeonStorage")
-                if not ds then continue end
-                for _, dungeon in ipairs(ds:GetChildren()) do
-                    local r = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-                    if not r then continue end
-                    local prompt = dungeon:FindFirstChildWhichIsA("ProximityPrompt", true)
-                    if prompt then
-                        local part = prompt.Parent
-                        if part and part:IsA("BasePart") then
-                            r.AssemblyLinearVelocity = Vector3.zero
-                            r.CFrame = part.CFrame + Vector3.new(0,3,0)
-                            task.wait(0.4)
-                            fireproximityprompt(prompt)
-                        end
-                    end
-                end
-            end
-        end)
-
-    elseif flag == "AutoDungeonUpgrade" then
-        task.spawn(function()
-            while wDungeon.flags.AutoDungeonUpgrade do
-                if not IsInsideDungeon() then pcall(RunDungeonUpgrades) end
-                task.wait(10)
-            end
-        end)
-
-    elseif flag == "AutoElementSingle" then
-        AutoElementThread = task.spawn(function()
-            while wElement.flags.AutoElementSingle do
-                if IsInsideDungeon() then task.wait(2) continue end
-                local zd = ElementZoneList[SelectedElementZoneIndex]
-                if not zd then task.wait(1) continue end
-                local ok, zp = zd.getZone()
-                local cont = zd.getBoss()
-                if not ok or not zp or not cont then task.wait(1) continue end
-                local tgt = GetActiveZoneTarget(cont)
-                if tgt then
-                    local r = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-                    if r then
-                        local tp = tgt:FindFirstChild("HumanoidRootPart") or tgt:FindFirstChildWhichIsA("BasePart")
-                        r.AssemblyLinearVelocity = Vector3.zero
-                        r.CFrame = CFrame.new((tp and tp.Position or zp.Position) + Vector3.new(0,4,0))
-                    end
-                    pcall(function() SwingSaber:FireServer() end)
-                    task.wait(0.05)
-                else task.wait(0.5) end
-            end
-            AutoElementThread = nil
-        end)
-
-    elseif flag == "AutoElementCycle" then
-        AutoElementThread = task.spawn(function()
-            local currentTarget = nil
-            while wElement.flags.AutoElementCycle do
-                if IsInsideDungeon() then currentTarget = nil task.wait(1) continue end
-                local valid = false
-                if currentTarget and currentTarget.Parent then
-                    local hum = currentTarget:FindFirstChildOfClass("Humanoid")
-                    valid = hum and hum.Health > 0 or (not hum)
-                end
-                if not valid then
-                    currentTarget = nil
-                    local bi = FindHighestPriorityZone()
-                    if bi then
-                        local zd = ElementZoneList[bi]
-                        if zd then
-                            local cont = zd.getBoss and zd.getBoss()
-                            if cont then currentTarget = GetActiveZoneTarget(cont) end
-                        end
-                    end
-                end
-                if currentTarget then
-                    local r = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-                    if r then
-                        local tp = currentTarget:FindFirstChild("HumanoidRootPart") or currentTarget:FindFirstChildWhichIsA("BasePart")
-                        if tp then
-                            r.AssemblyLinearVelocity = Vector3.zero
-                            r.AssemblyAngularVelocity = Vector3.zero
-                            r.CFrame = tp.CFrame + Vector3.new(0,4,0)
-                        end
-                    end
-                    pcall(function() SwingSaber:FireServer() end)
-                end
-                task.wait(0.05)
-            end
-            AutoElementThread = nil
-        end)
-
-    elseif flag == "AutoBuyMerchant" then
-        MerchantThread = task.spawn(function()
-            local lastResetDT = nil
-            while wMerchant.flags.AutoBuyMerchant do
-                local mgr = GetClientData()
-                if mgr and mgr.Data and mgr.Data.TravelingMerchant then
-                    local rdt = mgr.Data.TravelingMerchant.ResetDT
-                    if rdt ~= lastResetDT then
-                        lastResetDT = rdt
-                        task.wait(1)
-                        pcall(RunMerchantBuy)
-                    end
-                end
-                task.wait(5)
-            end
-            MerchantThread = nil
-        end)
-
-    elseif flag == "MiscBadges" or flag == "MiscFireLevel" or flag == "MiscDisplayName" then
-        StartMiscLoop()
-    end
+    end)
 end
 
--- Delays before re-enabling sensitive flags after rejoin
-local RestoreDelays = {
-    AutoRunDungeons  = 8,
-    AutoFarmDungeon  = 5,
-    AutoClaimChest   = 5,
-    AutoElementSingle = 3,
-    AutoElementCycle  = 3,
-}
+-- -------------------------------------------------------
+-- Load: read JSON file back into a table
+-- -------------------------------------------------------
+local function LoadConfig()
+    local ok, raw = pcall(function()
+        if readfile then return readfile(CONFIG_FILE) end
+        return nil
+    end)
+    if not ok or not raw or raw == "" then return nil end
+    local dok, data = pcall(function() return HttpService:JSONDecode(raw) end)
+    if not dok or not data then return nil end
+    return data
+end
 
-local WinMap = {
-    wFarm=wFarm, wHatch=wHatch, wDex=wDex,
-    wDungeon=wDungeon, wElement=wElement,
-    wExtra=wExtra, wMisc=wMisc, wMerchant=wMerchant
-}
+-- -------------------------------------------------------
+-- Central callback map — one entry per toggle flag that
+-- starts a background loop. Mirrors every loop in the script.
+-- -------------------------------------------------------
+local function BuildToggleCallbacks()
+    return {
+        -- ===== wFarm =====
+        AutoBuySaber = function()
+            task.spawn(function()
+                while wFarm.flags.AutoBuySaber do
+                    UIAction:FireServer("BuyAllWeapons")
+                    task.wait(1)
+                end
+            end)
+        end,
+        AutoBuyDNA = function()
+            task.spawn(function()
+                while wFarm.flags.AutoBuyDNA do
+                    UIAction:FireServer("BuyAllDNAs")
+                    task.wait(1)
+                end
+            end)
+        end,
+        AutoBuyBossHits = function()
+            task.spawn(function()
+                while wFarm.flags.AutoBuyBossHits do
+                    UIAction:FireServer("BuyAllBossBoosts")
+                    task.wait(1)
+                end
+            end)
+        end,
+        AutoBuyAuras = function()
+            task.spawn(function()
+                while wFarm.flags.AutoBuyAuras do
+                    UIAction:FireServer("BuyAllAuras")
+                    task.wait(1)
+                end
+            end)
+        end,
+        AutoBuyPetAuras = function()
+            task.spawn(function()
+                while wFarm.flags.AutoBuyPetAuras do
+                    UIAction:FireServer("BuyAllPetAuras")
+                    task.wait(1)
+                end
+            end)
+        end,
+        AutoClaimDaily = function()
+            task.spawn(function()
+                while wFarm.flags.AutoClaimDaily do
+                    UIAction:FireServer("ClaimDailyTimedReward")
+                    task.wait(1)
+                end
+            end)
+        end,
+        AutoBuyClass = function()
+            local conn
+            conn = RunService.Heartbeat:Connect(function()
+                if not wFarm.flags.AutoBuyClass then conn:Disconnect() return end
+                local nextClass = GetNextClass()
+                if nextClass then UIAction:FireServer("BuyClass", nextClass) end
+            end)
+        end,
+        SellStrength = function()
+            local conn
+            conn = RunService.Heartbeat:Connect(function()
+                if not wFarm.flags.SellStrength then conn:Disconnect() return end
+                SellStrength:FireServer()
+            end)
+        end,
+        FollowBoss = function()
+            local conn
+            conn = RunService.Heartbeat:Connect(function()
+                if not wFarm.flags.FollowBoss then conn:Disconnect() return end
+                local Gameplay   = Workspace:FindFirstChild("Gameplay")
+                local BossFolder = Gameplay and Gameplay:FindFirstChild("Boss")
+                local Holder     = BossFolder and BossFolder:FindFirstChild("BossHolder")
+                local bossModel  = Holder and Holder:FindFirstChild("Boss")
+                local char       = player.Character
+                local root       = char and char:FindFirstChild("HumanoidRootPart")
+                if bossModel and root and bossModel:FindFirstChild("HumanoidRootPart") then
+                    local bossRoot  = bossModel.HumanoidRootPart
+                    local offset    = bossRoot.CFrame.LookVector * -5
+                    local targetPos = bossRoot.Position + offset + Vector3.new(0, 2, 0)
+                    root.CFrame = CFrame.lookAt(targetPos, bossRoot.Position)
+                end
+            end)
+        end,
+        HitboxExtender = function()
+            local conn
+            conn = RunService.Heartbeat:Connect(function()
+                if not wFarm.flags.HitboxExtender then
+                    conn:Disconnect()
+                    for _, mob in ipairs(GetAllMobs()) do ResetMobHitbox(mob) end
+                    return
+                end
+                for _, mob in ipairs(GetAllMobs()) do
+                    local hp   = mob:GetAttribute("Health")
+                    local root = mob:FindFirstChild("HumanoidRootPart")
+                    if root and root:IsA("BasePart") then
+                        if hp and tonumber(hp) > 0 then
+                            root.Size         = Vector3.new(60, 60, 60)
+                            root.Transparency = 0.75
+                            root.Color        = Color3.fromRGB(0, 180, 255)
+                            root.Material     = Enum.Material.Neon
+                            root.CanCollide   = false
+                        else
+                            ResetMobHitbox(mob)
+                        end
+                    end
+                end
+            end)
+        end,
 
+        -- ===== wHatch =====
+        AutoHatchSelected = function()
+            task.spawn(function()
+                while wHatch.flags.AutoHatchSelected do
+                    pcall(function() UIAction:FireServer("BuyEgg", SelectedHatchEgg) end)
+                    task.wait(0.25)
+                end
+            end)
+        end,
+
+        -- ===== wDex =====
+        AutoCompleteDex = function()
+            task.spawn(function()
+                while wDex.flags.AutoCompleteDex do
+                    local clientManager = GetClientData()
+                    if clientManager and clientManager.Data then
+                        local myIndex   = clientManager.Data.Index or {}
+                        local safeLimit = #EggProgressionOrder - SkipCount
+                        local targetEgg = nil
+                        for i = 1, safeLimit do
+                            local eggName = EggProgressionOrder[i]
+                            local pets    = MasterEggDatabase[eggName]
+                            if pets then
+                                local incomplete = false
+                                for _, petName in ipairs(pets) do
+                                    if not table.find(myIndex, petName) then incomplete = true break end
+                                end
+                                if incomplete then targetEgg = eggName break end
+                            end
+                        end
+                        if targetEgg then
+                            pcall(function() UIAction:FireServer("BuyEgg", targetEgg) end)
+                            task.wait(0.2)
+                        else
+                            task.wait(2)
+                        end
+                    else
+                        task.wait(1)
+                    end
+                end
+            end)
+        end,
+        AutoRedeemDexRewards = function()
+            task.spawn(function()
+                while wDex.flags.AutoRedeemDexRewards do
+                    pcall(function()
+                        local clientManager = GetClientData()
+                        if clientManager and clientManager.Data then
+                            local claimed = clientManager.Data.PetdexRewardsClaimed or {}
+                            for rewardKey, rewardData in pairs(PetdexRewardInfo.Items) do
+                                if not wDex.flags.AutoRedeemDexRewards then break end
+                                if not table.find(claimed, rewardKey) then
+                                    local eligible = false
+                                    if rewardData.PetsNeeded then
+                                        eligible = PetdexRewardInfo:GetNumPetsDiscovered(clientManager.Data) >= rewardData.PetsNeeded
+                                    elseif rewardData.EggsNeeded then
+                                        eligible = PetdexRewardInfo:GetNumEggsCompleted(clientManager.Data) >= rewardData.EggsNeeded
+                                    end
+                                    if eligible then
+                                        UIAction:FireServer("ClaimPetdexReward", rewardKey)
+                                        task.wait(0.4)
+                                    end
+                                end
+                            end
+                        end
+                    end)
+                    task.wait(4)
+                end
+            end)
+        end,
+
+        -- ===== wDungeon =====
+        AutoRunDungeons = function()
+            task.spawn(function()
+                print("[Dungeon] Auto Run loop started (restored)")
+                while wDungeon.flags.AutoRunDungeons do
+                    if IsInsideDungeon() then
+                        while wDungeon.flags.AutoRunDungeons and IsInsideDungeon() do task.wait(2) end
+                        task.wait(3)
+                    end
+                    if not wDungeon.flags.AutoRunDungeons then break end
+                    local cd = GetDungeonCooldown()
+                    if cd > 0 then
+                        while wDungeon.flags.AutoRunDungeons do
+                            task.wait(1)
+                            if GetDungeonCooldown() == 0 then break end
+                        end
+                    else
+                        local started = false
+                        pcall(function() started = CreateAndStartDungeon() end)
+                        if started then
+                            local lw = 0
+                            while not IsInsideDungeon() and lw < 20 and wDungeon.flags.AutoRunDungeons do
+                                task.wait(1) lw = lw + 1
+                            end
+                            if IsInsideDungeon() then
+                                WaitForDungeonBossAndClaimChest(300)
+                            end
+                            local settle = 0
+                            repeat task.wait(2) settle = settle + 2
+                            until GetDungeonCooldown() > 0 or settle >= 30
+                            if GetDungeonCooldown() == 0 then task.wait(60) end
+                        else
+                            task.wait(15)
+                        end
+                    end
+                end
+            end)
+        end,
+        AutoFarmDungeon = function()
+            local conn2
+            local function resetOri()
+                local c = player.Character
+                local r = c and c:FindFirstChild("HumanoidRootPart")
+                if r then r.AssemblyLinearVelocity = Vector3.zero r.CFrame = CFrame.new(r.Position) end
+            end
+            conn2 = RunService.Stepped:Connect(function()
+                if not wDungeon.flags.AutoFarmDungeon then conn2:Disconnect() resetOri() return end
+                if not IsInsideDungeon() then return end
+                local c = player.Character
+                local r = c and c:FindFirstChild("HumanoidRootPart")
+                local b = FindActiveBotChild()
+                if r and b then
+                    r.AssemblyLinearVelocity  = Vector3.zero
+                    r.AssemblyAngularVelocity = Vector3.zero
+                    r.CFrame = CFrame.fromMatrix(b.Position + Vector3.new(0, dungeonHeightOffset, 0), customRightVector, customUpVector, -customLookVector)
+                elseif r then
+                    r.AssemblyLinearVelocity = Vector3.zero r.CFrame = CFrame.new(r.Position)
+                end
+            end)
+        end,
+        AutoClaimChest = function()
+            task.spawn(function()
+                while wDungeon.flags.AutoClaimChest do
+                    task.wait(0.3)
+                    local ds = workspace:FindFirstChild("DungeonStorage")
+                    if not ds then continue end
+                    for _, dungeon in ipairs(ds:GetChildren()) do
+                        local r = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+                        if not r then continue end
+                        local prompt = dungeon:FindFirstChildWhichIsA("ProximityPrompt", true)
+                        if prompt then
+                            local part = prompt.Parent
+                            if part and part:IsA("BasePart") then
+                                r.AssemblyLinearVelocity = Vector3.zero
+                                r.CFrame = part.CFrame + Vector3.new(0, 3, 0)
+                                task.wait(0.4)
+                                fireproximityprompt(prompt)
+                            end
+                        end
+                    end
+                end
+            end)
+        end,
+        AutoDungeonUpgrade = function()
+            if AutoUpgradeThread then task.cancel(AutoUpgradeThread) AutoUpgradeThread = nil end
+            AutoUpgradeThread = task.spawn(function()
+                while wDungeon.flags.AutoDungeonUpgrade do
+                    if not IsInsideDungeon() then pcall(RunDungeonUpgrades) end
+                    task.wait(10)
+                end
+                AutoUpgradeThread = nil
+            end)
+        end,
+
+        -- ===== wElement =====
+        AutoElementSingle = function()
+            if AutoElementThread then task.cancel(AutoElementThread) AutoElementThread = nil end
+            AutoElementThread = task.spawn(function()
+                while wElement.flags.AutoElementSingle do
+                    if IsInsideDungeon() then
+                        task.wait(2)
+                        while wElement.flags.AutoElementSingle and IsInsideDungeon() do task.wait(2) end
+                        task.wait(1)
+                    end
+                    if not wElement.flags.AutoElementSingle then break end
+                    local zoneDef = ElementZoneList[SelectedElementZoneIndex]
+                    if not zoneDef then task.wait(1)
+                    else
+                        local ok, zonePart = zoneDef.getZone()
+                        local container = zoneDef.getBoss()
+                        if not ok or not zonePart or not container then
+                            task.wait(1)
+                        else
+                            local currentTarget = GetActiveZoneTarget(container)
+                            if currentTarget then
+                                local char = player.Character
+                                local r = char and char:FindFirstChild("HumanoidRootPart")
+                                if r then
+                                    local targetPart = currentTarget:FindFirstChild("HumanoidRootPart") or currentTarget:FindFirstChildWhichIsA("BasePart")
+                                    local targetPos = targetPart and targetPart.Position or zonePart.Position
+                                    r.AssemblyLinearVelocity = Vector3.zero
+                                    r.CFrame = CFrame.new(targetPos + Vector3.new(0, 4, 0))
+                                end
+                                pcall(function() SwingSaber:FireServer() end)
+                                task.wait(0.05)
+                            else
+                                task.wait(0.5)
+                            end
+                        end
+                    end
+                end
+                AutoElementThread = nil
+            end)
+        end,
+        AutoElementCycle = function()
+            if AutoElementThread then task.cancel(AutoElementThread) AutoElementThread = nil end
+            AutoElementThread = task.spawn(function()
+                local currentTarget = nil
+                while wElement.flags.AutoElementCycle do
+                    if IsInsideDungeon() then
+                        currentTarget = nil
+                        while wElement.flags.AutoElementCycle and IsInsideDungeon() do task.wait(1) end
+                        task.wait(0.5) continue
+                    end
+                    local valid = false
+                    if currentTarget and currentTarget.Parent then
+                        local hum = currentTarget:FindFirstChildOfClass("Humanoid")
+                        valid = hum and hum.Health > 0 or (not hum and true)
+                    end
+                    if not valid then
+                        currentTarget = nil
+                        local bestIndex = FindHighestPriorityZone()
+                        if bestIndex then
+                            local zd = ElementZoneList[bestIndex]
+                            if zd then
+                                local c2 = zd.getBoss and zd.getBoss()
+                                if c2 then currentTarget = GetActiveZoneTarget(c2) end
+                            end
+                        end
+                    end
+                    if currentTarget then
+                        local char = player.Character
+                        local root = char and char:FindFirstChild("HumanoidRootPart")
+                        if root then
+                            local tp = currentTarget:FindFirstChild("HumanoidRootPart") or currentTarget:FindFirstChildWhichIsA("BasePart")
+                            if tp then
+                                root.AssemblyLinearVelocity  = Vector3.zero
+                                root.AssemblyAngularVelocity = Vector3.zero
+                                root.CFrame = tp.CFrame + Vector3.new(0, 4, 0)
+                            end
+                        end
+                        pcall(function() SwingSaber:FireServer() end)
+                    end
+                    task.wait(0.05)
+                end
+                AutoElementThread = nil
+            end)
+        end,
+
+        -- ===== wExtra (Quests) =====
+        -- AutoCompleteClanQuests is driven by the main quest loop already running,
+        -- just restoring the flag is enough since the loop is persistent (task.spawn at bottom of Quests tab)
+        -- AutoClaimQuestRewards same
+
+        -- ===== wMisc =====
+        MiscBadges = function()
+            if AnyMiscActive() then StartMiscLoop() end
+        end,
+        MiscFireLevel = function()
+            if AnyMiscActive() then StartMiscLoop() end
+        end,
+        MiscDisplayName = function()
+            if AnyMiscActive() then StartMiscLoop() end
+        end,
+
+        -- ===== wMerchant =====
+        AutoBuyMerchant = function()
+            if MerchantThread then task.cancel(MerchantThread) MerchantThread = nil end
+            MerchantThread = task.spawn(function()
+                local lastResetDT = nil
+                while wMerchant.flags.AutoBuyMerchant do
+                    local mgr = GetClientData()
+                    if mgr and mgr.Data and mgr.Data.TravelingMerchant then
+                        local resetDT = mgr.Data.TravelingMerchant.ResetDT
+                        if resetDT ~= lastResetDT then
+                            lastResetDT = resetDT
+                            print("[Merchant] New restock detected — buying now.")
+                            task.wait(1)
+                            pcall(RunMerchantBuy)
+                        end
+                    end
+                    task.wait(5)
+                end
+                MerchantThread = nil
+            end)
+        end,
+    }
+end
+
+-- -------------------------------------------------------
+-- Restore: read saved flags and re-fire toggle callbacks
+-- -------------------------------------------------------
 local function RestoreConfig()
     local saved = LoadConfig()
-    if not saved then print("[AutoSave] No config found.") return end
-    print("[AutoSave] Restoring...")
+    if not saved then
+        print("[AutoSave] No config found, starting fresh.")
+        return
+    end
+
+    print("[AutoSave] Restoring config...")
+
+    local callbacks = BuildToggleCallbacks()
 
     for winName, flags in pairs(saved) do
-        local win = WinMap[winName]
+        local win = WindowMap[winName]
         if not win then continue end
+
         for flag, val in pairs(flags) do
-            if val ~= true then
-                -- Just set non-boolean/non-active values directly (numbers, false)
-                win.flags[flag] = val
-                continue
+            -- Always restore the raw flag value first
+            win.flags[flag] = val
+
+            if val == true then
+                local delaySecs = DelayedFlags[flag]
+
+                if delaySecs then
+                    -- Delayed-sensitive flags: wait for the game to load
+                    task.spawn(function()
+                        task.wait(delaySecs)
+                        if not win.flags[flag] then return end -- user turned it off during wait
+                        local cb = callbacks[flag]
+                        if cb then
+                            print("[AutoSave] Delayed restore: " .. flag)
+                            pcall(cb)
+                        end
+                    end)
+                else
+                    -- Immediate restore with a tiny settle gap
+                    task.spawn(function()
+                        task.wait(2)
+                        if not win.flags[flag] then return end
+                        local cb = callbacks[flag]
+                        if cb then
+                            pcall(cb)
+                        end
+                    end)
+                end
             end
-            -- It's a true toggle — set flag then fire the loop after a delay
-            local delay = RestoreDelays[flag] or 2
-            task.spawn(function()
-                task.wait(delay)
-                win.flags[flag] = true
-                print("[AutoSave] Restoring: " .. flag)
-                pcall(FireToggleOn, flag)
-            end)
         end
     end
 
-    print("[AutoSave] Done.")
+    print("[AutoSave] Config restored.")
 end
 
--- Save every 10 seconds
+-- -------------------------------------------------------
+-- Auto-save every 10 seconds + on teleport
+-- -------------------------------------------------------
 task.spawn(function()
     while true do
         task.wait(10)
@@ -3639,13 +3802,12 @@ task.spawn(function()
     end
 end)
 
--- Save on teleport
-pcall(function()
-    Players.LocalPlayer.OnTeleport:Connect(function()
-        pcall(SaveConfig)
-    end)
+game:GetService("Players").LocalPlayer.OnTeleport:Connect(function()
+    pcall(SaveConfig)
 end)
 
-RestoreConfig()
+-- Also save immediately so a first-run creates the file
+pcall(SaveConfig)
 
-end -- loadMainHub
+-- Kick off restore
+RestoreConfig()
