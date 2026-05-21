@@ -64,10 +64,8 @@ end
 
 
 -- =======================================================
--- FORCE LOAD AREAS (LOOPED)
+-- FORCE LOAD AREAS (FIXED)
 -- =======================================================
-
-local ForceLoadThread
 
 local function DeepFind(parent, name)
     for _, v in ipairs(parent:GetDescendants()) do
@@ -77,66 +75,52 @@ local function DeepFind(parent, name)
     end
 end
 
-local function StartForceLoadAreas()
-
-    if ForceLoadThread then
-        task.cancel(ForceLoadThread)
-        ForceLoadThread = nil
-    end
-
-    ForceLoadThread = task.spawn(function()
+local function RunForceLoadAreas()
+    task.spawn(function()
 
         local rs = game:GetService("ReplicatedStorage")
 
-        while task.wait(5) do -- re-check every 5 seconds
+        local gameplay = workspace:FindFirstChild("Gameplay") or DeepFind(workspace, "Gameplay")
+        if not gameplay then
+            warn("[ARAB HUB] Gameplay not found")
+            return
+        end
 
-            local gameplay =
-                workspace:FindFirstChild("Gameplay")
-                or DeepFind(workspace, "Gameplay")
+        local regionsLoaded =
+            gameplay:FindFirstChild("RegionsLoaded")
+            or DeepFind(gameplay, "RegionsLoaded")
 
-            if not gameplay then
-                continue
-            end
+        if not regionsLoaded then
+            warn("[ARAB HUB] RegionsLoaded not found")
+            return
+        end
 
-            local regionsLoaded =
-                gameplay:FindFirstChild("RegionsLoaded")
-                or DeepFind(gameplay, "RegionsLoaded")
+        local hiddenRegions =
+            rs:FindFirstChild("HiddenRegions")
+            or DeepFind(rs, "HiddenRegions")
 
-            if not regionsLoaded then
-                continue
-            end
+        if not hiddenRegions then
+            warn("[ARAB HUB] HiddenRegions not found")
+            return
+        end
 
-            local hiddenRegions =
-                rs:FindFirstChild("HiddenRegions")
-                or DeepFind(rs, "HiddenRegions")
+        local moved = 0
 
-            if not hiddenRegions then
-                continue
-            end
-
-            local moved = 0
-
-            for _, region in ipairs(hiddenRegions:GetChildren()) do
-                if region:IsA("Folder") or region:IsA("Model") then
-
-                    if region.Parent ~= regionsLoaded then
-                        pcall(function()
-                            region.Parent = regionsLoaded
-                            moved += 1
-                        end)
-                    end
-
-                end
-            end
-
-            if moved > 0 then
-                print("[ARAB HUB] Force loaded regions:", moved)
+        for _, region in ipairs(hiddenRegions:GetChildren()) do
+            if region:IsA("Folder") or region:IsA("Model") then
+                pcall(function()
+                    region.Parent = regionsLoaded
+                    moved += 1
+                end)
             end
         end
+
+        print("[ARAB HUB] Loaded regions:", moved)
     end)
 end
 
-StartForceLoadAreas()
+RunForceLoadAreas()
+
 
 
 
@@ -1916,18 +1900,10 @@ wDungeon:Button("Boss Height: " .. dungeonHeightOffset .. " (tap to cycle)", fun
 end)
 
 wDungeon:Toggle("Auto Farm Dungeon", {flag = "AutoFarmDungeon"}, function(v)
-
-    if v then
-        dungeonHeightOffset = 10
-        print("[Dungeon] Boss Height Offset forced to 10")
-    end
-
     local conn
-
     local function resetOrientation()
         local char = player.Character
         local root = char and char:FindFirstChild("HumanoidRootPart")
-
         if root then
             root.AssemblyLinearVelocity  = Vector3.zero
             root.AssemblyAngularVelocity = Vector3.zero
@@ -1937,7 +1913,6 @@ wDungeon:Toggle("Auto Farm Dungeon", {flag = "AutoFarmDungeon"}, function(v)
 
     if v then
         conn = RunService.Stepped:Connect(function()
-
             if not wDungeon.flags.AutoFarmDungeon then
                 conn:Disconnect()
                 conn = nil
@@ -1946,45 +1921,25 @@ wDungeon:Toggle("Auto Farm Dungeon", {flag = "AutoFarmDungeon"}, function(v)
             end
 
             -- Only control player movement while actually inside a dungeon.
-            if not IsInsideDungeon() then
-                return
-            end
+            if not IsInsideDungeon() then return end
 
             local char    = player.Character
             local root    = char and char:FindFirstChild("HumanoidRootPart")
             local botRoot = FindActiveBotChild()
 
             if root and botRoot then
-
                 root.AssemblyLinearVelocity  = Vector3.zero
                 root.AssemblyAngularVelocity = Vector3.zero
-
-                local targetPos =
-                    botRoot.Position + Vector3.new(0, dungeonHeightOffset, 0)
-
-                root.CFrame = CFrame.fromMatrix(
-                    targetPos,
-                    customRightVector,
-                    customUpVector,
-                    -customLookVector
-                )
-
+                local targetPos = botRoot.Position + Vector3.new(0, dungeonHeightOffset, 0)
+                root.CFrame = CFrame.fromMatrix(targetPos, customRightVector, customUpVector, -customLookVector)
             elseif root then
-
                 root.AssemblyLinearVelocity  = Vector3.zero
                 root.AssemblyAngularVelocity = Vector3.zero
                 root.CFrame = CFrame.new(root.Position)
-
             end
         end)
-
     else
-
-        if conn then
-            conn:Disconnect()
-            conn = nil
-        end
-
+        if conn then conn:Disconnect() conn = nil end
         resetOrientation()
     end
 end)
@@ -2293,60 +2248,55 @@ end
 
 wElement:Section("Automation")
 
-elseif flag == "AutoFarmDungeon" then
+wElement:Toggle("Auto Farm Selected Zone", {flag = "AutoElementSingle"}, function(v)
+    if AutoElementThread then task.cancel(AutoElementThread) AutoElementThread = nil end
+    if not v then return end
 
-    dungeonHeightOffset = 10
-    print("[Dungeon] Restored Boss Height Offset to 10")
+    AutoElementThread = task.spawn(function()
+        while wElement.flags.AutoElementSingle do
+            -- Pause while inside a dungeon
+            if IsInsideDungeon() then
+                task.wait(2)
+                while wElement.flags.AutoElementSingle and IsInsideDungeon() do
+                    task.wait(2)
+                end
+                task.wait(1)
+            end
 
-    local conn2
+            if not wElement.flags.AutoElementSingle then break end
 
-    local function resetOri()
-        local c = player.Character
-        local r = c and c:FindFirstChild("HumanoidRootPart")
+            local zoneDef = ElementZoneList[SelectedElementZoneIndex]
+            if not zoneDef then task.wait(1)
+            else -- zoneDef exists, proceed
+            
+            local ok, zonePart = zoneDef.getZone()
+            local container = zoneDef.getBoss()
 
-        if r then
-            r.AssemblyLinearVelocity  = Vector3.zero
-            r.AssemblyAngularVelocity = Vector3.zero
-            r.CFrame = CFrame.new(r.Position)
-        end
-    end
-
-    conn2 = RunService.Stepped:Connect(function()
-
-        if not wDungeon.flags.AutoFarmDungeon then
-            conn2:Disconnect()
-            resetOri()
-            return
-        end
-
-        if not IsInsideDungeon() then
-            return
-        end
-
-        local c = player.Character
-        local r = c and c:FindFirstChild("HumanoidRootPart")
-        local b = FindActiveBotChild()
-
-        if r and b then
-
-            r.AssemblyLinearVelocity  = Vector3.zero
-            r.AssemblyAngularVelocity = Vector3.zero
-
-            r.CFrame = CFrame.fromMatrix(
-                b.Position + Vector3.new(0, dungeonHeightOffset, 0),
-                customRightVector,
-                customUpVector,
-                -customLookVector
-            )
-
-        elseif r then
-
-            r.AssemblyLinearVelocity  = Vector3.zero
-            r.AssemblyAngularVelocity = Vector3.zero
-            r.CFrame = CFrame.new(r.Position)
-
-        end
+            if not ok or not zonePart or not container then
+                task.wait(1)
+            else
+                local currentTarget = GetActiveZoneTarget(container)
+                if currentTarget then
+                    local char = player.Character
+                    local r = char and char:FindFirstChild("HumanoidRootPart")
+                    if r then
+                        local targetPart = currentTarget:FindFirstChild("HumanoidRootPart") or currentTarget:FindFirstChildWhichIsA("BasePart")
+                        local targetPos = targetPart and targetPart.Position or zonePart.Position
+                        -- Reposition every tick — corrects knockback and mob movement instantly
+                        r.AssemblyLinearVelocity = Vector3.zero
+                        r.CFrame = CFrame.new(targetPos + Vector3.new(0, 4, 0))
+                    end
+                    pcall(function() SwingSaber:FireServer() end)
+                    task.wait(0.05)
+                else
+                    task.wait(0.5)
+                end
+            end -- close if not ok or not zonePart
+            end -- close if not zoneDef else
+        end -- close while AutoElementSingle
+        AutoElementThread = nil
     end)
+end)
 
 wElement:Toggle("Cycle All Fire Zones", {flag = "AutoElementCycle"}, function(v)
 
