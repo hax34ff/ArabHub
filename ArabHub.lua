@@ -525,10 +525,9 @@ function library:CreateWindow(name)
             win.flags[flag] = defaultValue
         end
 
-        Tab:CreateToggle({
+        local toggleObj = Tab:CreateToggle({
             Name = label,
             Default = defaultValue,
-            Flag = flag,
 
             Callback = function(v)
                 if flag then
@@ -541,6 +540,14 @@ function library:CreateWindow(name)
                 end
             end,
         })
+
+        -- Force the visual state to match the restored value
+        if defaultValue and toggleObj and toggleObj.Set then
+            task.spawn(function()
+                task.wait(0.1)
+                pcall(function() toggleObj:Set(true) end)
+            end)
+        end
 
         -- auto-run callback for restored toggles
         task.spawn(function()
