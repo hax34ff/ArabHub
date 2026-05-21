@@ -1800,24 +1800,22 @@ pcall(function()
 			end
 		end
 	end)
-	-- Force difficulty to Impossible and persist it
+-- Restore saved difficulty, or default to Impossible
 	local function ApplyImpossible()
+		local savedDiff = ConfigFlags["DungeonDiff"]
+		local targetName = (type(savedDiff) == "string" and savedDiff ~= "") and savedDiff or "Impossible"
 		for i, diff in ipairs(DungeonInfo.Difficulties) do
-			if diff.Name == "Impossible" then
+			if diff.Name == targetName then
 				SelectedDiffIndex = i
-				UpdateFlag("DungeonDiff", "Impossible")
-				print("[Dungeon] Difficulty locked to Impossible (index " .. i .. ")")
+				print("[Dungeon] Difficulty restored to: " .. targetName .. " (index " .. i .. ")")
 				return
 			end
 		end
-		-- Fallback: Impossible not found, use last difficulty
+		-- Fallback if saved name not found
 		SelectedDiffIndex = #DungeonInfo.Difficulties
-		UpdateFlag("DungeonDiff", DungeonInfo.Difficulties[SelectedDiffIndex] and DungeonInfo.Difficulties[SelectedDiffIndex].Name or "Unknown")
-		warn("[Dungeon] 'Impossible' not found in DifficultyNameList — defaulted to last entry")
+		warn("[Dungeon] Saved difficulty '" .. tostring(targetName) .. "' not found — defaulted to last entry")
 	end
 	ApplyImpossible()
-end)
-
 -- Party type: use explicit button-style toggles so Luna can't corrupt the value
 wDungeon:Section("Party Type")
 wDungeon:Button("Set Public (currently: " .. SelectedGroupType .. ")", function()
