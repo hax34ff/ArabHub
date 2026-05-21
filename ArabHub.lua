@@ -1,3 +1,40 @@
+-- =======================================================
+-- FORCE LOAD AREAS (IMMEDIATE EXECUTION)
+-- =======================================================
+local function DeepFindFolder(parent, folderName)
+	local found = parent:FindFirstChild(folderName, true)
+	if found and (found:IsA("Folder") or found:IsA("Model")) then return found end
+	return nil
+end
+
+local function RunForceLoadAreas()
+    pcall(function()
+        -- Use WaitForChild to execute as soon as the paths exist, instead of an arbitrary timer
+        local RegionsLoaded = workspace:WaitForChild("Gameplay", 10) and workspace.Gameplay:WaitForChild("RegionsLoaded", 5)
+        local HiddenRegions = game:GetService("ReplicatedStorage"):WaitForChild("HiddenRegions", 5)
+        
+        -- Fallback to deep searching if the direct hierarchy paths vary
+        if not RegionsLoaded then RegionsLoaded = DeepFindFolder(workspace, "RegionsLoaded") end
+        if not HiddenRegions then HiddenRegions = DeepFindFolder(game:GetService("ReplicatedStorage"), "HiddenRegions") end
+        
+        if RegionsLoaded and HiddenRegions then
+            for _, region in ipairs(HiddenRegions:GetChildren()) do
+                if (region:IsA("Folder") or region:IsA("Model")) and region.Parent ~= RegionsLoaded then region.Parent = RegionsLoaded
+                end
+            end
+            print("[AMZY] Force Load Areas executed successfully.")
+        else warn("[AMZY] Force Load Areas failed: Targeted folders could not be located.")
+        end
+    end)
+end
+
+-- Execute instantly in its own non-blocking thread path upon running the script
+task.spawn(RunForceLoadAreas)
+
+
+
+
+
 -- ==========================================
 -- 1. YOUR WORK.INK CONFIGURATION
 -- ==========================================
@@ -63,38 +100,6 @@ end
 
 
 
--- =======================================================
--- FORCE LOAD AREAS (IMMEDIATE EXECUTION)
--- =======================================================
-local function DeepFindFolder(parent, folderName)
-	local found = parent:FindFirstChild(folderName, true)
-	if found and (found:IsA("Folder") or found:IsA("Model")) then return found end
-	return nil
-end
-
-local function RunForceLoadAreas()
-    pcall(function()
-        -- Use WaitForChild to execute as soon as the paths exist, instead of an arbitrary timer
-        local RegionsLoaded = workspace:WaitForChild("Gameplay", 10) and workspace.Gameplay:WaitForChild("RegionsLoaded", 5)
-        local HiddenRegions = game:GetService("ReplicatedStorage"):WaitForChild("HiddenRegions", 5)
-        
-        -- Fallback to deep searching if the direct hierarchy paths vary
-        if not RegionsLoaded then RegionsLoaded = DeepFindFolder(workspace, "RegionsLoaded") end
-        if not HiddenRegions then HiddenRegions = DeepFindFolder(game:GetService("ReplicatedStorage"), "HiddenRegions") end
-        
-        if RegionsLoaded and HiddenRegions then
-            for _, region in ipairs(HiddenRegions:GetChildren()) do
-                if (region:IsA("Folder") or region:IsA("Model")) and region.Parent ~= RegionsLoaded then region.Parent = RegionsLoaded
-                end
-            end
-            print("[AMZY] Force Load Areas executed successfully.")
-        else warn("[AMZY] Force Load Areas failed: Targeted folders could not be located.")
-        end
-    end)
-end
-
--- Execute instantly in its own non-blocking thread path upon running the script
-task.spawn(RunForceLoadAreas)
 
 
 
