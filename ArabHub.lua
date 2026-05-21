@@ -64,8 +64,10 @@ end
 
 
 -- =======================================================
--- FORCE LOAD AREAS (FIXED)
+-- FORCE LOAD AREAS (LOOPED)
 -- =======================================================
+
+local ForceLoadThread
 
 local function DeepFind(parent, name)
     for _, v in ipairs(parent:GetDescendants()) do
@@ -75,52 +77,66 @@ local function DeepFind(parent, name)
     end
 end
 
-local function RunForceLoadAreas()
-    task.spawn(function()
+local function StartForceLoadAreas()
+
+    if ForceLoadThread then
+        task.cancel(ForceLoadThread)
+        ForceLoadThread = nil
+    end
+
+    ForceLoadThread = task.spawn(function()
 
         local rs = game:GetService("ReplicatedStorage")
 
-        local gameplay = workspace:FindFirstChild("Gameplay") or DeepFind(workspace, "Gameplay")
-        if not gameplay then
-            warn("[ARAB HUB] Gameplay not found")
-            return
-        end
+        while task.wait(5) do -- re-check every 5 seconds
 
-        local regionsLoaded =
-            gameplay:FindFirstChild("RegionsLoaded")
-            or DeepFind(gameplay, "RegionsLoaded")
+            local gameplay =
+                workspace:FindFirstChild("Gameplay")
+                or DeepFind(workspace, "Gameplay")
 
-        if not regionsLoaded then
-            warn("[ARAB HUB] RegionsLoaded not found")
-            return
-        end
+            if not gameplay then
+                continue
+            end
 
-        local hiddenRegions =
-            rs:FindFirstChild("HiddenRegions")
-            or DeepFind(rs, "HiddenRegions")
+            local regionsLoaded =
+                gameplay:FindFirstChild("RegionsLoaded")
+                or DeepFind(gameplay, "RegionsLoaded")
 
-        if not hiddenRegions then
-            warn("[ARAB HUB] HiddenRegions not found")
-            return
-        end
+            if not regionsLoaded then
+                continue
+            end
 
-        local moved = 0
+            local hiddenRegions =
+                rs:FindFirstChild("HiddenRegions")
+                or DeepFind(rs, "HiddenRegions")
 
-        for _, region in ipairs(hiddenRegions:GetChildren()) do
-            if region:IsA("Folder") or region:IsA("Model") then
-                pcall(function()
-                    region.Parent = regionsLoaded
-                    moved += 1
-                end)
+            if not hiddenRegions then
+                continue
+            end
+
+            local moved = 0
+
+            for _, region in ipairs(hiddenRegions:GetChildren()) do
+                if region:IsA("Folder") or region:IsA("Model") then
+
+                    if region.Parent ~= regionsLoaded then
+                        pcall(function()
+                            region.Parent = regionsLoaded
+                            moved += 1
+                        end)
+                    end
+
+                end
+            end
+
+            if moved > 0 then
+                print("[ARAB HUB] Force loaded regions:", moved)
             end
         end
-
-        print("[ARAB HUB] Loaded regions:", moved)
     end)
 end
 
-RunForceLoadAreas()
-
+StartForceLoadAreas()
 
 
 
