@@ -499,6 +499,9 @@ Luna:Notification({
     Content = "Loaded Successfully"
 })
 
+-- Registry of every toggle object keyed by flag name, for visual restore
+local ToggleRegistry = {}
+
 -- Tab shim: library:CreateWindow(name) → Luna Tab
 local library = {}
 function library:CreateWindow(name)
@@ -541,12 +544,9 @@ function library:CreateWindow(name)
             end,
         })
 
-        -- Force the visual state to match the restored value
-        if defaultValue and toggleObj and toggleObj.Set then
-            task.spawn(function()
-                task.wait(0.1)
-                pcall(function() toggleObj:Set(true) end)
-            end)
+        -- Store so we can force the visual ON after all tabs are built
+        if flag and toggleObj then
+            ToggleRegistry[flag] = toggleObj
         end
 
         -- auto-run callback for restored toggles
