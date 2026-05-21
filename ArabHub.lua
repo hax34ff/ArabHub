@@ -64,37 +64,79 @@ end
 
 
 -- =======================================================
--- FORCE LOAD AREAS (IMMEDIATE EXECUTION)
+-- FORCE LOAD AREAS (LOOPED)
 -- =======================================================
-local function DeepFindFolder(parent, folderName)
-	local found = parent:FindFirstChild(folderName, true)
-	if found and (found:IsA("Folder") or found:IsA("Model")) then return found end
-	return nil
+
+local ForceLoadThread
+
+local function DeepFind(parent, name)
+    for _, v in ipairs(parent:GetDescendants()) do
+        if v.Name == name then
+            return v
+        end
+    end
 end
 
-local function RunForceLoadAreas()
-    pcall(function()
-        -- Use WaitForChild to execute as soon as the paths exist, instead of an arbitrary timer
-        local RegionsLoaded = workspace:WaitForChild("Gameplay", 10) and workspace.Gameplay:WaitForChild("RegionsLoaded", 5)
-        local HiddenRegions = game:GetService("ReplicatedStorage"):WaitForChild("HiddenRegions", 5)
-        
-        -- Fallback to deep searching if the direct hierarchy paths vary
-        if not RegionsLoaded then RegionsLoaded = DeepFindFolder(workspace, "RegionsLoaded") end
-        if not HiddenRegions then HiddenRegions = DeepFindFolder(game:GetService("ReplicatedStorage"), "HiddenRegions") end
-        
-        if RegionsLoaded and HiddenRegions then
-            for _, region in ipairs(HiddenRegions:GetChildren()) do
-                if (region:IsA("Folder") or region:IsA("Model")) and region.Parent ~= RegionsLoaded then region.Parent = RegionsLoaded
+local function StartForceLoadAreas()
+
+    if ForceLoadThread then
+        task.cancel(ForceLoadThread)
+        ForceLoadThread = nil
+    end
+
+    ForceLoadThread = task.spawn(function()
+
+        local rs = game:GetService("ReplicatedStorage")
+
+        while task.wait(5) do -- re-check every 5 seconds
+
+            local gameplay =
+                workspace:FindFirstChild("Gameplay")
+                or DeepFind(workspace, "Gameplay")
+
+            if not gameplay then
+                continue
+            end
+
+            local regionsLoaded =
+                gameplay:FindFirstChild("RegionsLoaded")
+                or DeepFind(gameplay, "RegionsLoaded")
+
+            if not regionsLoaded then
+                continue
+            end
+
+            local hiddenRegions =
+                rs:FindFirstChild("HiddenRegions")
+                or DeepFind(rs, "HiddenRegions")
+
+            if not hiddenRegions then
+                continue
+            end
+
+            local moved = 0
+
+            for _, region in ipairs(hiddenRegions:GetChildren()) do
+                if region:IsA("Folder") or region:IsA("Model") then
+
+                    if region.Parent ~= regionsLoaded then
+                        pcall(function()
+                            region.Parent = regionsLoaded
+                            moved += 1
+                        end)
+                    end
+
                 end
             end
-            print("[AMZY] Force Load Areas executed successfully.")
-        else warn("[AMZY] Force Load Areas failed: Targeted folders could not be located.")
+
+            if moved > 0 then
+                print("[ARAB HUB] Force loaded regions:", moved)
+            end
         end
     end)
 end
 
--- Execute instantly in its own non-blocking thread path upon running the script
-task.spawn(RunForceLoadAreas)
+StartForceLoadAreas()
 
 
 
@@ -445,7 +487,7 @@ local function UpdateFlag(flag, value)
 end
 
 -- Global State
-local dungeonHeightOffset = RegisterFlag("DungeonHeightOffset", 10)
+local dungeonHeightOffset = 0
 local SkipCount           = 0
 
 -- Vector Orientations (controls player angle when farming)
@@ -1752,28 +1794,12 @@ pcall(function()
 		for i, diff in ipairs(DungeonInfo.Difficulties) do
 			if diff.Name == selected then
 				SelectedDiffIndex = i
-				UpdateFlag("DungeonDiff", selected)
 				print("[Dungeon] Selected difficulty index: " .. i .. " (" .. selected .. ")")
 				break
 			end
 		end
 	end)
-	-- Force difficulty to Impossible and persist it
-	local function ApplyImpossible()
-		for i, diff in ipairs(DungeonInfo.Difficulties) do
-			if diff.Name == "Impossible" then
-				SelectedDiffIndex = i
-				UpdateFlag("DungeonDiff", "Impossible")
-				print("[Dungeon] Difficulty locked to Impossible (index " .. i .. ")")
-				return
-			end
-		end
-		-- Fallback: Impossible not found, use last difficulty
-		SelectedDiffIndex = #DungeonInfo.Difficulties
-		UpdateFlag("DungeonDiff", DungeonInfo.Difficulties[SelectedDiffIndex] and DungeonInfo.Difficulties[SelectedDiffIndex].Name or "Unknown")
-		warn("[Dungeon] 'Impossible' not found in DifficultyNameList — defaulted to last entry")
-	end
-	ApplyImpossible()
+	SelectedDiffIndex = 1 -- force-init to first
 end)
 
 -- Party type: use explicit button-style toggles so Luna can't corrupt the value
@@ -1879,13 +1905,15 @@ wDungeon:Section("Cooldown Status")
 -- =======================================================
 wDungeon:Section("Farming")
 
-dungeonHeightOffset = 10
-UpdateFlag("DungeonHeightOffset", 10)
-wDungeon:Button("Boss Height: " .. dungeonHeightOffset .. " (fixed)", function()
-	-- Height is fixed at 10 and auto-saved; button is informational only
-	dungeonHeightOffset = 10
-	UpdateFlag("DungeonHeightOffset", 10)
-	print("[Dungeon] Boss Height Offset is fixed at: " .. dungeonHeightOffset)
+dungeonHeightOffset = 0
+wDungeon:Button("Boss Height: " .. dungeonHeightOffset .. " (tap to cycle)", function()
+	local steps = {0, 2, 4, 6, 8, 9, 10}
+	local next = 1
+	for i, v in ipairs(steps) do
+		if v == dungeonHeightOffset then next = (i % #steps) + 1 break end
+	end
+	dungeonHeightOffset = steps[next]
+	print("[Dungeon] Boss Height Offset set to: " .. dungeonHeightOffset)
 end)
 
 wDungeon:Toggle("Auto Farm Dungeon", {flag = "AutoFarmDungeon"}, function(v)
