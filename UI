@@ -367,12 +367,14 @@ function Library:CreateWindow(config)
     })
     AddCorner(FloatToggle, 20)
     AddStroke(FloatToggle, Theme.Accent, 1)
-    Create("ImageLabel", {
-        Image = "rbxassetid://118302999158194",
-        ScaleType = Enum.ScaleType.Fit,
+    
+    local img = Create("ImageLabel", {
+        Size = UDim2.new(1, -6, 1, -6),
+        Position = UDim2.fromOffset(3, 3),
         BackgroundTransparency = 1,
-        Size = UDim2.new(1, -8, 1, -8),
-        Position = UDim2.fromOffset(4, 4),
+        Image = "rbxassetid://6031094678", -- test first
+        ScaleType = Enum.ScaleType.Fit,
+        ZIndex = 10,
         Parent = FloatToggle
     })
     MakeDraggable(FloatToggle, FloatToggle)
