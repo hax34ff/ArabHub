@@ -367,13 +367,12 @@ function Library:CreateWindow(config)
     })
     AddCorner(FloatToggle, 20)
     AddStroke(FloatToggle, Theme.Accent, 1)
-    Create("TextLabel", {
-        Text = ArabicTitle,
-        Font = Theme.FontBold,
-        TextSize = 14,
-        TextColor3 = Theme.Accent,
+    Create("ImageLabel", {
+        Image = "rbxassetid://118302999158194",
+        ScaleType = Enum.ScaleType.Fit,
         BackgroundTransparency = 1,
-        Size = UDim2.fromScale(1, 1),
+        Size = UDim2.new(1, -8, 1, -8),
+        Position = UDim2.fromOffset(4, 4),
         Parent = FloatToggle
     })
     MakeDraggable(FloatToggle, FloatToggle)
